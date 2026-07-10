@@ -1,14 +1,17 @@
 """
-psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v1.1)
+psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v1.2)
 
-v1.1: browser-grade headers + homepage warm-up (cookie collection) so the
-request passes dps.psx.com.pk's bot protection when running from cloud
-hosts, plus per-symbol error capture (LAST_ERRORS) for diagnostics.
+v1.1: browser-grade headers + homepage warm-up (cookie collection), plus
+per-symbol error capture (LAST_ERRORS) for diagnostics.
+v1.2: PSX renamed the history table's date column TIME -> DATE; accept both
+with flexible date parsing. Gentler concurrency + retry backoff to avoid
+connection drops from cloud hosts.
 """
 
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
@@ -66,11 +69,13 @@ def _month_starts(start: date, end: date) -> list[date]:
 
 
 def _download_month(symbol: str, d: date, timeout: float = 20.0,
-                    retries: int = 2):
+                    retries: int = 3):
     """Returns (DataFrame|None, error_string|None)."""
     payload = {"month": d.month, "year": d.year, "symbol": symbol}
     err = None
     for attempt in range(retries + 1):
+        if attempt:
+            time.sleep(0.8 * attempt)   # backoff between retries
         try:
             r = _session().post(HIST_URL, data=payload, timeout=timeout)
             if r.status_code != 200:
@@ -107,7 +112,7 @@ def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFra
     months = _month_starts(start, end)
 
     frames, errs = [], []
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=3) as ex:
         futures = [ex.submit(_download_month, symbol, m) for m in months]
         for fut in as_completed(futures):
             df, err = fut.result()
@@ -121,10 +126,19 @@ def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFra
         return None
 
     df = pd.concat(frames, ignore_index=True)
-    if "TIME" not in df.columns:
+    date_col = next((c for c in df.columns
+                     if c.strip().upper() in ("TIME", "DATE")), None)
+    if date_col is None:
         LAST_ERRORS[symbol] = f"unexpected columns: {list(df.columns)[:6]}"
         return None
-    df["Date"] = pd.to_datetime(df["TIME"], format="%b %d, %Y", errors="coerce")
+    # PSX has used "Jul 10, 2026" historically; parse that first, then fall
+    # back to generic parsing if the site changes format again.
+    parsed = pd.to_datetime(df[date_col], format="%b %d, %Y", errors="coerce")
+    if parsed.isna().mean() > 0.5:
+        parsed = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+    if parsed.isna().mean() > 0.5:
+        parsed = pd.to_datetime(df[date_col], errors="coerce", dayfirst=False)
+    df["Date"] = parsed
     df = df.dropna(subset=["Date"]).set_index("Date").sort_index()
     df = df.rename(columns=str.title)
 
