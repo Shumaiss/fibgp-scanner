@@ -1,5 +1,5 @@
 """
-psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v2.0)
+psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v2.1)
 
 v2.0: SCSTrade (scstrade.com) is now the PRIMARY source — one JSON request
 per symbol for the full history, and it doesn't block cloud hosts the way
@@ -8,6 +8,10 @@ Same proven route as the PSX Whale Screener v2.0 fetcher.
 
 Returns identical DataFrames either way: Date-indexed Open/High/Low/Close/
 Volume floats. Failure reasons per symbol land in LAST_ERRORS.
+
+v2.1: tries both scstrade.com and www.scstrade.com (endpoint 404s during
+their maintenance windows), and adds a same-day disk cache — once a scan
+succeeds, that day's data survives source outages and app reboots.
 """
 
 from __future__ import annotations
@@ -56,8 +60,9 @@ def _finalize(df: pd.DataFrame, start: date, end: date,
 
 
 # ============================ PRIMARY: SCSTrade ===========================
-SCS_URL = "https://scstrade.com/stockscreening/SS_HistoricalCharts.aspx/chart"
-SCS_REFERER = "https://scstrade.com/stockscreening/SS_HistoricalCharts.aspx"
+SCS_HOSTS = ("https://scstrade.com", "https://www.scstrade.com")
+SCS_PATH = "/stockscreening/SS_HistoricalCharts.aspx/chart"
+SCS_REF_PATH = "/stockscreening/SS_HistoricalCharts.aspx"
 
 _MS_DATE = re.compile(r"/Date\((\-?\d+)")
 
@@ -90,17 +95,21 @@ def fetch_scstrade(symbol: str, start: date, end: date,
     payload = {"par": symbol,
                "date1": start.strftime("%m/%d/%Y"),
                "date2": end.strftime("%m/%d/%Y")}
-    headers = {"Content-Type": "application/json; charset=UTF-8",
-               "Referer": SCS_REFERER,
-               "X-Requested-With": "XMLHttpRequest",
-               "Origin": "https://scstrade.com"}
     err = None
     for attempt in range(retries + 1):
         if attempt:
             time.sleep(1.5 * attempt)
+        host = SCS_HOSTS[attempt % len(SCS_HOSTS)]
+        headers = {"Content-Type": "application/json; charset=UTF-8",
+                   "Referer": host + SCS_REF_PATH,
+                   "X-Requested-With": "XMLHttpRequest",
+                   "Origin": host}
         try:
-            r = _session().post(SCS_URL, json=payload, headers=headers,
+            r = _session().post(host + SCS_PATH, json=payload, headers=headers,
                                 timeout=timeout)
+            if r.status_code == 404:
+                err = "SCS HTTP 404 (endpoint down — likely maintenance)"
+                continue
             if r.status_code != 200:
                 err = f"SCS HTTP {r.status_code}"
                 continue
@@ -221,17 +230,55 @@ def fetch_psx(symbol: str, start: date, end: date) -> pd.DataFrame | None:
     return _finalize(df, start, end, symbol)
 
 
+# ============================== DISK CACHE ================================
+import os
+CACHE_DIR = "/tmp/fibgp_cache"
+
+
+def _cache_path(symbol: str, start: date, end: date) -> str:
+    return os.path.join(CACHE_DIR,
+                        f"{symbol}_{start.isoformat()}_{end.isoformat()}.csv")
+
+
+def _cache_read(symbol: str, start: date, end: date) -> pd.DataFrame | None:
+    try:
+        p = _cache_path(symbol, start, end)
+        if not os.path.exists(p):
+            return None
+        df = pd.read_csv(p, index_col=0, parse_dates=True)
+        need = {"Open", "High", "Low", "Close"}
+        return df if need.issubset(df.columns) and len(df) else None
+    except Exception:
+        return None
+
+
+def _cache_write(symbol: str, start: date, end: date, df: pd.DataFrame):
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        df.to_csv(_cache_path(symbol, start, end))
+    except Exception:
+        pass
+
+
 # ============================ PUBLIC ENTRYPOINT ============================
 def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFrame | None:
-    """SCSTrade first; dps.psx.com.pk as fallback. On total failure,
-    LAST_ERRORS[symbol] carries both sources' reasons."""
+    """Same-day disk cache first, then SCSTrade, then dps.psx.com.pk.
+    On total failure, LAST_ERRORS[symbol] carries both sources' reasons.
+    Cache is keyed by (symbol, window incl. today) so it naturally expires
+    when the calendar day rolls over."""
     end = end or date.today()
+    cached = _cache_read(symbol, start, end)
+    if cached is not None:
+        LAST_ERRORS.pop(symbol, None)
+        return cached
     df = fetch_scstrade(symbol, start, end)
     if df is not None:
+        _cache_write(symbol, start, end, df)
         return df
     scs_err = LAST_ERRORS.get(symbol, "SCS failed")
     df = fetch_psx(symbol, start, end)
     if df is not None:
+        _cache_write(symbol, start, end, df)
         return df
     psx_err = LAST_ERRORS.get(symbol, "PSX failed")
     LAST_ERRORS[symbol] = f"{scs_err} | {psx_err}"
