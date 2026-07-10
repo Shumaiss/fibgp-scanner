@@ -1,11 +1,13 @@
 """
-psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v1.2)
+psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v1.3)
 
 v1.1: browser-grade headers + homepage warm-up (cookie collection), plus
 per-symbol error capture (LAST_ERRORS) for diagnostics.
 v1.2: PSX renamed the history table's date column TIME -> DATE; accept both
-with flexible date parsing. Gentler concurrency + retry backoff to avoid
-connection drops from cloud hosts.
+with flexible date parsing.
+v1.3: polite mode — months fetched sequentially per symbol with an
+inter-request delay and exponential retry backoff, so scans don't trip
+PSX's rate limiting / temporary IP bans. Detailed connection errors.
 """
 
 from __future__ import annotations
@@ -42,6 +44,9 @@ _local = threading.local()
 # symbol -> human-readable reason for the most recent failure
 LAST_ERRORS: dict[str, str] = {}
 
+# gap between consecutive requests (seconds) — keeps us under rate limits
+REQUEST_DELAY = 0.25
+
 
 def _session() -> requests.Session:
     if not hasattr(_local, "session"):
@@ -75,7 +80,7 @@ def _download_month(symbol: str, d: date, timeout: float = 20.0,
     err = None
     for attempt in range(retries + 1):
         if attempt:
-            time.sleep(0.8 * attempt)   # backoff between retries
+            time.sleep(1.5 * (2 ** (attempt - 1)))   # 1.5s, 3s, 6s backoff
         try:
             r = _session().post(HIST_URL, data=payload, timeout=timeout)
             if r.status_code != 200:
@@ -100,7 +105,8 @@ def _download_month(symbol: str, d: date, timeout: float = 20.0,
                 return None, "empty month"
             return pd.DataFrame(rows, columns=headers), None
         except requests.RequestException as e:
-            err = type(e).__name__
+            detail = str(e.args[0]) if e.args else str(e)
+            err = f"{type(e).__name__}: {detail[:120]}"
     return None, err
 
 
@@ -112,14 +118,15 @@ def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFra
     months = _month_starts(start, end)
 
     frames, errs = [], []
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        futures = [ex.submit(_download_month, symbol, m) for m in months]
-        for fut in as_completed(futures):
-            df, err = fut.result()
-            if df is not None and not df.empty:
-                frames.append(df)
-            elif err and err != "empty month":
-                errs.append(err)
+    for m in months:
+        df, err = _download_month(symbol, m)
+        if df is not None and not df.empty:
+            frames.append(df)
+        elif err and err != "empty month":
+            errs.append(err)
+            if len(errs) >= 3 and not frames:
+                break               # host clearly unreachable — stop early
+        time.sleep(REQUEST_DELAY)   # politeness gap between requests
 
     if not frames:
         LAST_ERRORS[symbol] = errs[0] if errs else "no rows returned"
