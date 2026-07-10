@@ -113,7 +113,7 @@ with st.sidebar:
         fvg_lb = st.number_input("FVG lookback (bars)", 10, 200, 50)
 
     run_scan = st.button("Scan", type="primary", use_container_width=True)
-    st.caption(f"{len(symbols)} symbols · EOD data via dps.psx.com.pk")
+    st.caption(f"{len(symbols)} symbols · PSX EOD data · SCSTrade + DPS")
 
 
 # ============================== DATA + SCAN ====================================
