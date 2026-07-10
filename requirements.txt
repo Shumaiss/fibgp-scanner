@@ -1,6 +1,6 @@
-streamlit>=1.35
-pandas>=2.0
-numpy>=1.24
+streamlit>=1.35,<1.50
+pandas>=2.2,<3
+numpy>=1.26,<2.3
 requests>=2.31
 beautifulsoup4>=4.12
 python-dateutil>=2.8
