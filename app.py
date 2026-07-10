@@ -239,7 +239,8 @@ with st.sidebar:
         n_cached = len([f for f in os.listdir(CACHE_DIR) if f.endswith(".csv")])
     except OSError:
         n_cached = 0
-    stamp = st.session_state.get("scan", (None, None, None, "—"))[3]
+    _sc = st.session_state.get("scan") or (None, None, None, "—")
+    stamp = _sc[3]
     st.markdown(f"""<div class='panel' style='margin-top:8px'>
       <div style='font-size:.66rem;letter-spacing:.12em;color:{MINT}'>● CACHE STATUS</div>
       <div style='font-size:.72rem;margin-top:4px'>{n_cached} symbols cached today<br>
