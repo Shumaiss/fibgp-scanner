@@ -1,12 +1,9 @@
 """
-psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange.
+psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v1.1)
 
-Uses the same public endpoint as the psxdata / psx-data-reader package
-(POST https://dps.psx.com.pk/historical, one request per symbol-month) but
-without per-symbol progress bars, with thread-local sessions, retries, and
-a callback hook so the Streamlit app can drive a single scan-level progress
-bar. Data is end-of-day official PSX history (effectively delayed, which
-suits a daily-timeframe scanner).
+v1.1: browser-grade headers + homepage warm-up (cookie collection) so the
+request passes dps.psx.com.pk's bot protection when running from cloud
+hosts, plus per-symbol error capture (LAST_ERRORS) for diagnostics.
 """
 
 from __future__ import annotations
@@ -21,16 +18,38 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-HIST_URL = "https://dps.psx.com.pk/historical"
-SYMBOLS_URL = "https://dps.psx.com.pk/symbols"
+BASE = "https://dps.psx.com.pk"
+HIST_URL = f"{BASE}/historical"
+SYMBOLS_URL = f"{BASE}/symbols"
+
+BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/126.0.0.0 Safari/537.36"),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": BASE,
+    "Referer": f"{BASE}/historical",
+    "X-Requested-With": "XMLHttpRequest",
+    "Connection": "keep-alive",
+}
 
 _local = threading.local()
+
+# symbol -> human-readable reason for the most recent failure
+LAST_ERRORS: dict[str, str] = {}
 
 
 def _session() -> requests.Session:
     if not hasattr(_local, "session"):
         s = requests.Session()
-        s.headers.update({"User-Agent": "Mozilla/5.0 (FibGP-Scanner)"})
+        s.headers.update(BROWSER_HEADERS)
+        # Warm-up: visit the site once like a browser would, collecting any
+        # cookies the protection layer sets before we start POSTing.
+        try:
+            s.get(BASE, timeout=15.0)
+        except requests.RequestException:
+            pass
         _local.session = s
     return _local.session
 
@@ -46,51 +65,64 @@ def _month_starts(start: date, end: date) -> list[date]:
     return out
 
 
-def _download_month(symbol: str, d: date, timeout: float = 15.0,
-                    retries: int = 2) -> pd.DataFrame | None:
+def _download_month(symbol: str, d: date, timeout: float = 20.0,
+                    retries: int = 2):
+    """Returns (DataFrame|None, error_string|None)."""
     payload = {"month": d.month, "year": d.year, "symbol": symbol}
+    err = None
     for attempt in range(retries + 1):
         try:
             r = _session().post(HIST_URL, data=payload, timeout=timeout)
-            r.raise_for_status()
+            if r.status_code != 200:
+                err = f"HTTP {r.status_code}"
+                continue
             soup = BeautifulSoup(r.text, "html.parser")
             headers = [th.get_text(strip=True) for th in soup.select("th")]
             if not headers:
-                return None
+                # 200 but no table — protection page or genuinely no data
+                low = r.text[:400].lower()
+                if "cloudflare" in low or "captcha" in low or "just a moment" in low:
+                    err = "blocked by site protection"
+                else:
+                    err = "empty month"
+                return None, err
             rows = []
             for tr in soup.select("tr"):
                 cols = [td.get_text(strip=True) for td in tr.select("td")]
                 if len(cols) == len(headers):
                     rows.append(cols)
             if not rows:
-                return None
-            df = pd.DataFrame(rows, columns=headers)
-            return df
-        except requests.RequestException:
-            if attempt == retries:
-                return None
-    return None
+                return None, "empty month"
+            return pd.DataFrame(rows, columns=headers), None
+        except requests.RequestException as e:
+            err = type(e).__name__
+    return None, err
 
 
 def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFrame | None:
     """Fetch daily OHLCV for one symbol. Returns a DataFrame indexed by Date
-    with float columns Open, High, Low, Close, Volume — or None on failure."""
+    with float columns Open, High, Low, Close, Volume — or None on failure
+    (reason recorded in LAST_ERRORS[symbol])."""
     end = end or date.today()
     months = _month_starts(start, end)
 
-    frames = []
+    frames, errs = [], []
     with ThreadPoolExecutor(max_workers=6) as ex:
         futures = [ex.submit(_download_month, symbol, m) for m in months]
         for fut in as_completed(futures):
-            df = fut.result()
+            df, err = fut.result()
             if df is not None and not df.empty:
                 frames.append(df)
+            elif err and err != "empty month":
+                errs.append(err)
 
     if not frames:
+        LAST_ERRORS[symbol] = errs[0] if errs else "no rows returned"
         return None
 
     df = pd.concat(frames, ignore_index=True)
     if "TIME" not in df.columns:
+        LAST_ERRORS[symbol] = f"unexpected columns: {list(df.columns)[:6]}"
         return None
     df["Date"] = pd.to_datetime(df["TIME"], format="%b %d, %Y", errors="coerce")
     df = df.dropna(subset=["Date"]).set_index("Date").sort_index()
@@ -98,6 +130,7 @@ def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFra
 
     keep = [c for c in ("Open", "High", "Low", "Close", "Volume") if c in df.columns]
     if len(keep) < 4:
+        LAST_ERRORS[symbol] = f"missing OHLC columns: have {keep}"
         return None
     df = df[keep]
     for col in keep:
@@ -106,11 +139,14 @@ def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFra
     df = df.dropna(subset=["Open", "High", "Low", "Close"])
     df = df[~df.index.duplicated(keep="last")]
     df = df.loc[(df.index.date >= start) & (df.index.date <= end)]
-    return df if len(df) else None
+    if not len(df):
+        LAST_ERRORS[symbol] = "no bars in requested window"
+        return None
+    LAST_ERRORS.pop(symbol, None)
+    return df
 
 
 def fetch_tickers() -> pd.DataFrame | None:
-    """Full PSX symbol directory from the official symbols endpoint."""
     try:
         r = _session().get(SYMBOLS_URL, timeout=15.0)
         r.raise_for_status()

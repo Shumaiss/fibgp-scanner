@@ -20,7 +20,7 @@ import pandas as pd
 import streamlit as st
 
 from fibgp_engine import FibGPEngine, EngineResult, classify, ScanRow
-from psx_fetch import fetch_daily
+from psx_fetch import fetch_daily, LAST_ERRORS
 from symbols import KSE100, QUICK25
 
 # ============================== PALETTE (FibGP suite) ==========================
@@ -280,6 +280,10 @@ meta = f"Scanned {len(results)} symbols · {stamp}"
 if failed:
     meta += f" · no data / insufficient bars: {', '.join(failed)}"
 st.caption(meta)
+if failed and not results:
+    reasons = {LAST_ERRORS.get(s, "unknown") for s in failed}
+    st.error("All fetches failed — reason(s): " + "; ".join(sorted(reasons))
+             + ". The PSX data server may be blocking this host.")
 
 # ---- CSV export ----
 if rows:
