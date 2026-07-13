@@ -1,9 +1,8 @@
 """
-FibGP Scanner v2.0 — PSX daily golden-pocket scanner, Whale-Screener UI.
+PSX Whale Screener — find stocks trading in or near key levels. Daily EOD.
 
 Terminal-style dashboard: stat cards, status-badge table with sparklines,
-summary donut, top pick card. Full-PSX universe support. Engine unchanged:
-faithful FibGP v11.5.3 zone engine over daily PSX data.
+summary donut, top pick card. Full-PSX universe support.
 
 Run:  streamlit run app.py
 """
@@ -39,7 +38,7 @@ MUTE   = "#6E8891"
 
 PAGE_SIZE = 15
 
-st.set_page_config(page_title="FibGP Scanner — PSX", page_icon="◆",
+st.set_page_config(page_title="PSX Whale Screener", page_icon="🐋",
                    layout="wide", initial_sidebar_state="expanded")
 
 st.markdown(f"""
@@ -204,8 +203,8 @@ def fmt_px(v: float) -> str:
 
 # ============================== SIDEBAR ========================================
 with st.sidebar:
-    st.markdown(f"<div class='hd-title'>Fib<span class='m'>GP</span></div>"
-                f"<div class='hd-sub'>GOLDEN POCKET SCANNER · PSX · DAILY</div>",
+    st.markdown(f"<div class='hd-title'>🐋 PSX <span class='m'>WHALE</span></div>"
+                f"<div class='hd-sub'>SCREENER · KEY LEVELS · DAILY</div>",
                 unsafe_allow_html=True)
     st.write("")
     universe_choice = st.radio("Universe",
@@ -246,8 +245,7 @@ with st.sidebar:
       <div style='font-size:.72rem;margin-top:4px'>{n_cached} symbols cached today<br>
       <span class='mut'>Last scan: {stamp}</span></div></div>""",
         unsafe_allow_html=True)
-    st.caption(f"{len(symbols)} symbols · PIVOTS {int(piv_l)}L/{int(piv_r)}R · "
-               f"EOD via SCSTrade + PSX")
+    st.caption(f"{len(symbols)} symbols · Daily EOD data · cached")
 
 
 # ============================== SCAN ===========================================
@@ -311,9 +309,9 @@ if run_scan:
 # ============================== HEADER =========================================
 hd_l, hd_m, hd_r = st.columns([2.6, 1.6, 1.2])
 with hd_l:
-    st.markdown(f"<div class='hd-title'>GOLDEN POCKET <span class='m'>SCANNER</span></div>"
-                f"<div class='hd-sub'>Find stocks trading in or near golden-pocket zones · "
-                f"FibGP v11.5.3 engine · 0.618–0.786</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='hd-title'>PSX WHALE <span class='m'>SCREENER</span></div>"
+                f"<div class='hd-sub'>Find stocks trading in or near key levels · Daily</div>",
+                unsafe_allow_html=True)
 with hd_m:
     search = st.text_input("Search ticker…", label_visibility="collapsed",
                            placeholder="Search ticker…")
@@ -329,8 +327,7 @@ if st.session_state.scan is None:
     st.markdown(f"<div class='panel'><span class='mut'>Pick a universe and press "
                 f"<b>SCAN</b>. Every symbol is categorized: in zone, near zone "
                 f"(≤ threshold), watching (zone active but farther), or no active "
-                f"zone. Zones follow the chart indicator exactly.</span></div>",
-                unsafe_allow_html=True)
+                f"zone.</span></div>", unsafe_allow_html=True)
     st.stop()
 
 rows, results, failed, stamp = st.session_state.scan
@@ -439,7 +436,7 @@ with left:
             "ZoneAgeBars": r.zone_age, "EnteredToday": r.entered_today,
         } for r in rows_sorted])
         st.download_button("Export CSV", export.to_csv(index=False),
-                           file_name=f"fibgp_scan_{date.today().isoformat()}.csv",
+                           file_name=f"whale_scan_{date.today().isoformat()}.csv",
                            mime="text/csv")
 
 with right:
@@ -492,20 +489,21 @@ with right:
     st.markdown(f"""<div class='panel'>
       <div class='panel-hd mut'>MARKET INSIGHT</div>
       <div style='font-size:.74rem;line-height:1.7' class='mut'>
-      Golden pockets mark where retracements meet precision.
-      Track the zones. Trade the reaction, not the prediction.</div>
+      Smart money flows where price meets precision.
+      Track the zones. Trade with the whales.</div>
     </div>""", unsafe_allow_html=True)
 
 # ============================== FOOTER =========================================
 foot = (f"Universe: {universe_choice} · Timeframe: Daily · "
-        f"Pivots: {int(piv_l)}L/{int(piv_r)}R · Data: SCSTrade + PSX (cached) · "
-        f"Scanned {len(results)}/{tot}")
+        f"Data: EOD (cached) · Scanned {len(results)}/{tot}")
 if failed:
     foot += f" · skipped {len(failed)}"
 st.caption(foot)
 if failed and not results:
     reasons = {LAST_ERRORS.get(s, "unknown") for s in failed}
-    st.error("All fetches failed — reason(s): " + "; ".join(sorted(reasons)))
+    print("FETCH DIAGNOSTICS:", "; ".join(sorted(reasons)))  # server logs only
+    st.error("Data sources are unreachable right now — please try again in a "
+             "few minutes. (Details logged for the operator.)")
 with st.expander(f"Skipped symbols ({len(failed)})" if failed else "Skipped symbols (0)"):
     if failed:
         st.markdown(f"<span class='mut' style='font-size:.72rem'>{', '.join(failed)}</span>",
