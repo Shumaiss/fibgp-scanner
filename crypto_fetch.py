@@ -124,7 +124,8 @@ def _frame_from_rows(recs: list[dict], start: date) -> pd.DataFrame | None:
     return df if len(df) else None
 
 
-def _c1_klines(symbol: str, market: str, start: date) -> tuple[pd.DataFrame | None, str | None]:
+def _c1_klines(symbol: str, market: str, start: date,
+               interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
     """Primary provider klines. Spot and perps use different hosts/paths.
     Response rows: [openTime, open, high, low, close, volume, ...] oldest-first,
     the last row being the forming candle."""
@@ -135,7 +136,7 @@ def _c1_klines(symbol: str, market: str, start: date) -> tuple[pd.DataFrame | No
     err = None
     for host in hosts:
         data, err = _get_json(host + path,
-                              {"symbol": symbol, "interval": "1d", "limit": 1000})
+                              {"symbol": symbol, "interval": interval, "limit": 1000})
         if data is None:
             continue
         if not isinstance(data, list):
@@ -156,7 +157,8 @@ def _c1_klines(symbol: str, market: str, start: date) -> tuple[pd.DataFrame | No
     return None, f"C1 {err}"
 
 
-def _c2_klines(symbol: str, market: str, start: date) -> tuple[pd.DataFrame | None, str | None]:
+def _c2_klines(symbol: str, market: str, start: date,
+               interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
     """Fallback provider klines. category spot|linear; rows newest-first:
     [startTime(ms str), open, high, low, close, volume, turnover]."""
     category = "spot" if market == "spot" else "linear"
@@ -164,7 +166,7 @@ def _c2_klines(symbol: str, market: str, start: date) -> tuple[pd.DataFrame | No
     for host in C2_HOSTS:
         data, err = _get_json(host + "/v5/market/kline",
                               {"category": category, "symbol": symbol,
-                               "interval": "D", "limit": 1000})
+                               "interval": ("W" if interval == "1w" else "D"), "limit": 1000})
         if data is None:
             continue
         rows = (data.get("result") or {}).get("list") or []
@@ -186,23 +188,26 @@ def _c2_klines(symbol: str, market: str, start: date) -> tuple[pd.DataFrame | No
     return None, f"C2 {err}"
 
 
-def fetch_daily_crypto(symbol: str, start: date, market: str = "spot") -> pd.DataFrame | None:
-    """15-min disk cache → primary → fallback. Returns Date-indexed
-    Open/High/Low/Close/Volume floats incl. the forming daily candle."""
-    cached = _candles_read(market, symbol)
+def fetch_daily_crypto(symbol: str, start: date, market: str = "spot",
+                       interval: str = "1d") -> pd.DataFrame | None:
+    """15-min disk cache → primary → fallback. interval '1d' or '1w' —
+    weekly candles are native exchange candles (Monday-start, UTC), incl.
+    the forming candle."""
+    ckey = f"{market}_{interval}"
+    cached = _candles_read(ckey, symbol)
     if cached is not None:
         cut = cached.loc[cached.index.date >= start]
         if len(cut):
             LAST_ERRORS.pop(symbol, None)
             return cut
-    df, e1 = _c1_klines(symbol, market, start)
+    df, e1 = _c1_klines(symbol, market, start, interval)
     if df is not None:
-        _candles_write(market, symbol, df)
+        _candles_write(ckey, symbol, df)
         LAST_ERRORS.pop(symbol, None)
         return df
-    df, e2 = _c2_klines(symbol, market, start)
+    df, e2 = _c2_klines(symbol, market, start, interval)
     if df is not None:
-        _candles_write(market, symbol, df)
+        _candles_write(ckey, symbol, df)
         LAST_ERRORS.pop(symbol, None)
         return df
     LAST_ERRORS[symbol] = f"{e1} | {e2}"

@@ -243,8 +243,11 @@ with st.sidebar:
     else:
         market = "perp"
 
+    timeframe = st.radio("Timeframe", ["Daily", "Weekly"], horizontal=True)
+    tf = "1w" if timeframe == "Weekly" else "1d"
     near_pct = st.slider("Near threshold (%)", 0.5, 5.0, 2.0, 0.25)
-    lookback_m = st.slider("History (months)", 8, 24, 18)
+    _min_m = 15 if tf == "1w" else 8
+    lookback_m = st.slider("History (months)", _min_m, 24, max(18, _min_m))
 
     with st.expander("Engine parameters"):
         piv_l = st.number_input("Pivot left bars", 1, 20, 5)
@@ -269,8 +272,9 @@ with st.sidebar:
       <span class='mut'>Last scan: {stamp}</span></div></div>""",
         unsafe_allow_html=True)
     n_lbl = f"{len(symbols)} symbols" if symbols is not None else "all USDT pairs"
+    tf_lbl = timeframe
     ttl_lbl = "EOD · cached" if market == "psx" else "24/7 · 15m cache"
-    st.caption(f"{n_lbl} · Daily · {ttl_lbl}")
+    st.caption(f"{n_lbl} · {tf_lbl} · {ttl_lbl}")
 
 
 # ============================== SCAN ===========================================
@@ -282,15 +286,29 @@ if "page" not in st.session_state:
     st.session_state.page = 1
 
 
-def run_full_scan(syms, start, engine, thr, market):
+def to_weekly(df: pd.DataFrame) -> pd.DataFrame:
+    """Daily -> weekly OHLC. Monday-keyed calendar weeks (chart convention);
+    the current forming week is included."""
+    wk = df.index - pd.to_timedelta(df.index.weekday, unit="D")
+    g = df.groupby(wk)
+    out = pd.DataFrame({"Open": g["Open"].first(), "High": g["High"].max(),
+                        "Low": g["Low"].min(), "Close": g["Close"].last(),
+                        "Volume": g["Volume"].sum()})
+    return out.sort_index()
+
+
+def run_full_scan(syms, start, engine, thr, market, tf):
     rows, results, failed = [], {}, []
     prog = st.progress(0.0, text="Fetching market data…")
-    key = (market, start.isoformat())
+    key = (market, tf, start.isoformat())
 
     def _fetch(s):
         if market == "psx":
-            return fetch_daily(s, start)
-        return fetch_daily_crypto(s, start, market)
+            df = fetch_daily(s, start)
+            return to_weekly(df) if (tf == "1w" and df is not None) else df
+        # crypto: native weekly candles; pull deeper history for weekly depth
+        c_start = start if tf == "1d" else date.today() - relativedelta(months=60)
+        return fetch_daily_crypto(s, c_start, market, tf)
 
     to_fetch = [s for s in syms if (s, key) not in st.session_state.ohlc_cache]
     done = 0
@@ -336,19 +354,21 @@ if run_scan:
     engine = FibGPEngine(piv_left=int(piv_l), piv_right=int(piv_r),
                          use_live=use_live, fvg_lookback=int(fvg_lb),
                          use_ema_conf=use_ema, use_fvg_conf=use_fvg)
-    rows, results, failed = run_full_scan(symbols, start, engine, near_pct, market)
+    rows, results, failed = run_full_scan(symbols, start, engine, near_pct,
+                                          market, tf)
     st.session_state.scan = (rows, results, failed,
                              pd.Timestamp.now().strftime("%d %b %Y %H:%M"))
     st.session_state.page = 1
     st.session_state.scan_start = start.isoformat()
     st.session_state.scan_market = market
+    st.session_state.scan_tf = tf
 
 
 # ============================== HEADER =========================================
 hd_l, hd_m, hd_r = st.columns([2.6, 1.6, 1.2])
 with hd_l:
     st.markdown(f"<div class='hd-title'>PSX WHALE <span class='m'>SCREENER</span></div>"
-                f"<div class='hd-sub'>Find stocks & crypto trading in or near key levels · Daily</div>",
+                f"<div class='hd-sub'>Find stocks & crypto trading in or near key levels · Daily / Weekly</div>",
                 unsafe_allow_html=True)
 with hd_m:
     search = st.text_input("Search ticker…", label_visibility="collapsed",
@@ -423,6 +443,7 @@ with left:
     page_rows = view[(pg - 1) * PAGE_SIZE: pg * PAGE_SIZE]
 
     key = (st.session_state.get("scan_market", "psx"),
+           st.session_state.get("scan_tf", "1d"),
            st.session_state.get("scan_start", ""))
     body = ""
     for i, r in enumerate(page_rows, start=(pg - 1) * PAGE_SIZE + 1):
@@ -510,6 +531,7 @@ with right:
         tp = actionable[0]
         df = st.session_state.ohlc_cache.get(
             (tp.symbol, (st.session_state.get("scan_market", "psx"),
+                         st.session_state.get("scan_tf", "1d"),
                          st.session_state.get("scan_start", ""))))
         spark = sparkline(df["Close"].to_numpy(), w=210, h=56) if df is not None else ""
         side_lbl = "support" if tp.side == "sup" else "resistance"
@@ -535,7 +557,8 @@ with right:
     </div>""", unsafe_allow_html=True)
 
 # ============================== FOOTER =========================================
-foot = (f"Universe: {universe_choice} · Timeframe: Daily · "
+_tf_name = "Weekly" if st.session_state.get("scan_tf") == "1w" else "Daily"
+foot = (f"Universe: {universe_choice} · Timeframe: {_tf_name} · "
         f"Data: EOD (cached) · Scanned {len(results)}/{tot}")
 if failed:
     foot += f" · skipped {len(failed)}"

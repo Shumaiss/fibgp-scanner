@@ -134,11 +134,31 @@ def test_rsi_stoch_sane():
           f"{res.stoch.signal} {res.stoch.dots}")
 
 
+def test_min_leg_atr_filter():
+    """Trader Pro update: a leg smaller than 2.5 x ATR(14) must not form a
+    zone, while the same shape scaled up must. Volatile bars (wide spread)
+    inflate ATR so the small leg fails the filter."""
+    # ATR must be seeded before the leg forms (Pine's na(atr) escape covers
+    # only a chart's first bars) — warm up with a monotonic decline, which
+    # can't form pivot pairs. Then: leg ~= 4 + 2*spread = 10 vs threshold
+    # 2.5*ATR ~= 15 -> rejected.
+    small = ramp(140, 100, 30) + ramp(100, 104, 20) + ramp(104, 102, 14)
+    o, h, l, c = make_bars(small, spread=3.0)
+    res_small = FibGPEngine().run(o, h, l, c)
+    assert res_small.support is None, "sub-threshold leg formed a zone"
+    big = ramp(140, 100, 30) + ramp(100, 200, 25) + ramp(200, 152, 14)    # leg ~106 >> threshold
+    o, h, l, c = make_bars(big, spread=3.0)
+    res_big = FibGPEngine().run(o, h, l, c)
+    assert res_big.support is not None, "qualifying leg rejected"
+    print(f"  min-leg filter OK: small leg -> no zone, big leg -> zone "
+          f"{res_big.support.bot:.1f}-{res_big.support.top:.1f}")
+
+
 if __name__ == "__main__":
     for fn in [test_support_zone_geometry, test_resistance_zone_geometry,
                test_support_break_clears_zone, test_entry_counting_and_stars,
                test_stale_rejection, test_classifier_buckets,
-               test_inside_zone_bucket, test_rsi_stoch_sane]:
+               test_inside_zone_bucket, test_min_leg_atr_filter, test_rsi_stoch_sane]:
         print(f"[{fn.__name__}]")
         fn()
     print("\nAll engine tests passed.")

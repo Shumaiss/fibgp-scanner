@@ -1,8 +1,10 @@
 """
-fibgp_engine.py — Faithful Python port of the FibGP v11.5.3 Pine Script zone engine.
+fibgp_engine.py — Faithful Python port of the Trader Pro zone engine
+(FibGP v11.5.3 base + minimum-leg ATR filter).
 
-Ported line-for-line from "Fib Golden Pocket — Premium + Confluences (v11.5.3)"
-(Pine Script v6). Execution model mirrors Pine exactly: the engine is a
+Ported line-for-line from the Pine Script v6 source. The Trader Pro update
+adds one strategy change: a leg only qualifies for a zone when its span is
+at least MIN_LEG_ATR × ATR(14) — small noise legs no longer form zones. Execution model mirrors Pine exactly: the engine is a
 bar-by-bar state machine fed one OHLCV bar at a time, in chronological order.
 
 Ported components:
@@ -43,6 +45,7 @@ MAX_PIVOTS = 80
 
 FVG_LOOKBACK = 50
 STALE_CAP = 480          # f_supStale / f_resStale search cap
+MIN_LEG_ATR = 2.5        # min leg span in ATRs to qualify as a zone
 
 RSI_LEN = 7
 STOCH_K = 5
@@ -83,6 +86,19 @@ def pine_rma(src: np.ndarray, length: int) -> np.ndarray:
     for i in range(length, n):
         out[i] = alpha * src[i] + (1.0 - alpha) * out[i - 1]
     return out
+
+
+def pine_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+             length: int = 14) -> np.ndarray:
+    """Pine ta.atr: RMA of true range; TR on the first bar is high-low."""
+    n = len(close)
+    tr = np.empty(n)
+    tr[0] = high[0] - low[0]
+    for i in range(1, n):
+        tr[i] = max(high[i] - low[i],
+                    abs(high[i] - close[i - 1]),
+                    abs(low[i] - close[i - 1]))
+    return pine_rma(tr, length)
 
 
 def pine_rsi(close: np.ndarray, length: int) -> np.ndarray:
@@ -239,13 +255,15 @@ class FibGPEngine:
                  fvg_lookback: int = FVG_LOOKBACK,
                  use_ema_conf: bool = True,
                  use_fvg_conf: bool = True,
-                 ema_picks: dict | None = None):
+                 ema_picks: dict | None = None,
+                 min_leg_atr: float = MIN_LEG_ATR):
         self.piv_left = piv_left
         self.piv_right = piv_right
         self.use_live = use_live
         self.fvg_lookback = fvg_lookback
         self.use_ema_conf = use_ema_conf
         self.use_fvg_conf = use_fvg_conf
+        self.min_leg_atr = min_leg_atr
         # Pine defaults: all five EMAs enabled
         self.ema_picks = ema_picks or {l: True for l in EMA_LENS}
 
@@ -369,6 +387,7 @@ class FibGPEngine:
 
         # ---- indicator series (vectorised precompute) ----
         emas = {length: pine_ema(close, length) for length in EMA_LENS}
+        atr14 = pine_atr(high, low, close, 14)
         rsi_series = pine_rsi(close, RSI_LEN)
         stoch_raw = pine_stoch(close, high, low, STOCH_K)
         k_series = pine_sma(stoch_raw, STOCH_K_SMOOTH)
@@ -448,7 +467,8 @@ class FibGPEngine:
                         hi_v = w_val[j]; lo_v = w_val[j - 1]; hi_t = w_time[j]
                         chrono_ok = hi_t > w_time[j - 1]
                         rng = hi_v - lo_v
-                        if rng > 0 and chrono_ok:
+                        leg_ok = math.isnan(atr14[i]) or rng >= self.min_leg_atr * atr14[i]
+                        if rng > 0 and chrono_ok and leg_ok:
                             c_top = hi_v - 0.618 * rng
                             c_bot = hi_v - 0.786 * rng
                             if c_bot <= c and not self._sup_stale(close, i, hi_t, c_bot):
@@ -467,7 +487,8 @@ class FibGPEngine:
                         lo_v = w_val[j]; hi_v = w_val[j - 1]; lo_t = w_time[j]
                         chrono_ok = lo_t > w_time[j - 1]
                         rng = hi_v - lo_v
-                        if rng > 0 and chrono_ok:
+                        leg_ok = math.isnan(atr14[i]) or rng >= self.min_leg_atr * atr14[i]
+                        if rng > 0 and chrono_ok and leg_ok:
                             c_bot = lo_v + 0.618 * rng
                             c_top = lo_v + 0.786 * rng
                             if c_top >= c and not self._res_stale(close, i, lo_t, c_top):
