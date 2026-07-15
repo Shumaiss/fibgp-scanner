@@ -1,5 +1,5 @@
 """
-PSX Whale Screener — find stocks trading in or near key levels. Daily EOD.
+PSX Whale Screener — stocks & crypto trading in or near key levels. Daily.
 
 Terminal-style dashboard: stat cards, status-badge table with sparklines,
 summary donut, top pick card. Full-PSX universe support.
@@ -22,6 +22,8 @@ import streamlit as st
 
 from fibgp_engine import FibGPEngine, EngineResult
 from psx_fetch import fetch_daily, LAST_ERRORS, CACHE_DIR
+from crypto_fetch import (fetch_daily_crypto, list_symbols,
+                          LAST_ERRORS as CRYPTO_ERRORS)
 from symbols import ALL_PSX, KSE100, QUICK25
 
 # ============================== PALETTE ========================================
@@ -198,7 +200,18 @@ def donut(counts: dict[str, int]) -> str:
 
 
 def fmt_px(v: float) -> str:
-    return "—" if (v is None or (isinstance(v, float) and math.isnan(v))) else f"{v:,.2f}"
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return "—"
+    a = abs(v)
+    if a >= 100:
+        return f"{v:,.2f}"
+    if a >= 1:
+        s = f"{v:,.3f}"
+    elif a >= 0.01:
+        s = f"{v:.5f}"
+    else:
+        s = f"{v:.8f}"
+    return s.rstrip("0").rstrip(".")
 
 
 # ============================== SIDEBAR ========================================
@@ -208,17 +221,27 @@ with st.sidebar:
                 unsafe_allow_html=True)
     st.write("")
     universe_choice = st.radio("Universe",
-                               ["All PSX", "KSE-100", "Quick 25", "Custom"])
+                               ["All PSX", "KSE-100", "Quick 25",
+                                "Crypto Spot", "Crypto Perps", "Custom"])
+    market = "psx"
+    symbols: list | None = None
     if universe_choice == "Custom":
-        custom_txt = st.text_area("Symbols", value="HBL, UBL, OGDC", height=80)
+        market_lbl = st.selectbox("Market", ["PSX", "Crypto Spot", "Crypto Perps"])
+        market = {"PSX": "psx", "Crypto Spot": "spot", "Crypto Perps": "perp"}[market_lbl]
+        default_syms = "HBL, UBL, OGDC" if market == "psx" else "BTCUSDT, ETHUSDT, SOLUSDT"
+        custom_txt = st.text_area("Symbols", value=default_syms, height=80)
         symbols = sorted({s.strip().upper() for s in
                           custom_txt.replace("\n", ",").split(",") if s.strip()})
     elif universe_choice == "All PSX":
         symbols = ALL_PSX
     elif universe_choice == "KSE-100":
         symbols = KSE100
-    else:
+    elif universe_choice == "Quick 25":
         symbols = QUICK25
+    elif universe_choice == "Crypto Spot":
+        market = "spot"       # full pair list resolved at scan time
+    else:
+        market = "perp"
 
     near_pct = st.slider("Near threshold (%)", 0.5, 5.0, 2.0, 0.25)
     lookback_m = st.slider("History (months)", 8, 24, 18)
@@ -245,7 +268,9 @@ with st.sidebar:
       <div style='font-size:.72rem;margin-top:4px'>{n_cached} symbols cached today<br>
       <span class='mut'>Last scan: {stamp}</span></div></div>""",
         unsafe_allow_html=True)
-    st.caption(f"{len(symbols)} symbols · Daily EOD data · cached")
+    n_lbl = f"{len(symbols)} symbols" if symbols is not None else "all USDT pairs"
+    ttl_lbl = "EOD · cached" if market == "psx" else "24/7 · 15m cache"
+    st.caption(f"{n_lbl} · Daily · {ttl_lbl}")
 
 
 # ============================== SCAN ===========================================
@@ -257,16 +282,22 @@ if "page" not in st.session_state:
     st.session_state.page = 1
 
 
-def run_full_scan(syms, start, engine, thr):
+def run_full_scan(syms, start, engine, thr, market):
     rows, results, failed = [], {}, []
-    prog = st.progress(0.0, text="Fetching PSX data…")
-    key = start.isoformat()
+    prog = st.progress(0.0, text="Fetching market data…")
+    key = (market, start.isoformat())
+
+    def _fetch(s):
+        if market == "psx":
+            return fetch_daily(s, start)
+        return fetch_daily_crypto(s, start, market)
 
     to_fetch = [s for s in syms if (s, key) not in st.session_state.ohlc_cache]
     done = 0
     if to_fetch:
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            futs = {ex.submit(fetch_daily, s, start): s for s in to_fetch}
+        workers = 4 if market == "psx" else 8
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(_fetch, s): s for s in to_fetch}
             for fut in as_completed(futs):
                 s = futs[fut]
                 try:
@@ -296,21 +327,28 @@ def run_full_scan(syms, start, engine, thr):
 
 if run_scan:
     start = date.today() - relativedelta(months=int(lookback_m))
+    if symbols is None:                      # full crypto universe
+        with st.spinner("Resolving pair list…"):
+            symbols, src_note = list_symbols(market)
+        if "fallback" in src_note:
+            st.warning(f"Using built-in majors list ({len(symbols)} pairs) — "
+                       f"full listing temporarily unavailable.")
     engine = FibGPEngine(piv_left=int(piv_l), piv_right=int(piv_r),
                          use_live=use_live, fvg_lookback=int(fvg_lb),
                          use_ema_conf=use_ema, use_fvg_conf=use_fvg)
-    rows, results, failed = run_full_scan(symbols, start, engine, near_pct)
+    rows, results, failed = run_full_scan(symbols, start, engine, near_pct, market)
     st.session_state.scan = (rows, results, failed,
                              pd.Timestamp.now().strftime("%d %b %Y %H:%M"))
     st.session_state.page = 1
     st.session_state.scan_start = start.isoformat()
+    st.session_state.scan_market = market
 
 
 # ============================== HEADER =========================================
 hd_l, hd_m, hd_r = st.columns([2.6, 1.6, 1.2])
 with hd_l:
     st.markdown(f"<div class='hd-title'>PSX WHALE <span class='m'>SCREENER</span></div>"
-                f"<div class='hd-sub'>Find stocks trading in or near key levels · Daily</div>",
+                f"<div class='hd-sub'>Find stocks & crypto trading in or near key levels · Daily</div>",
                 unsafe_allow_html=True)
 with hd_m:
     search = st.text_input("Search ticker…", label_visibility="collapsed",
@@ -384,7 +422,8 @@ with left:
     pg = st.session_state.page
     page_rows = view[(pg - 1) * PAGE_SIZE: pg * PAGE_SIZE]
 
-    key = st.session_state.get("scan_start", "")
+    key = (st.session_state.get("scan_market", "psx"),
+           st.session_state.get("scan_start", ""))
     body = ""
     for i, r in enumerate(page_rows, start=(pg - 1) * PAGE_SIZE + 1):
         label, cls = BADGE[r.status]
@@ -469,7 +508,9 @@ with right:
     actionable = [r for r in rows_sorted if r.status != "NO_ZONE" and r.dist < math.inf]
     if actionable:
         tp = actionable[0]
-        df = st.session_state.ohlc_cache.get((tp.symbol, st.session_state.get("scan_start", "")))
+        df = st.session_state.ohlc_cache.get(
+            (tp.symbol, (st.session_state.get("scan_market", "psx"),
+                         st.session_state.get("scan_start", ""))))
         spark = sparkline(df["Close"].to_numpy(), w=210, h=56) if df is not None else ""
         side_lbl = "support" if tp.side == "sup" else "resistance"
         conf = f" · {tp.conf}" if tp.conf else ""
@@ -477,7 +518,7 @@ with right:
           <div class='panel-hd'><span class='damber'>★</span> TOP PICK</div>
           <div class='sym'>{tp.symbol}</div>
           <div class='mut' style='font-size:.72rem'>{"in" if tp.dist == 0 else f"{tp.dist:.2f}% from"} {side_lbl} zone{conf}</div>
-          <div class='px'>{fmt_px(tp.close)} <span class='mut' style='font-size:.8rem'>PKR</span></div>
+          <div class='px'>{fmt_px(tp.close)} <span class='mut' style='font-size:.8rem'>{"PKR" if st.session_state.get("scan_market","psx")=="psx" else "USDT"}</span></div>
           <div style='margin:6px 0'>{spark}</div>
           <div style='font-size:.72rem'>ZONE <span class='mut'>{fmt_px(tp.zone_bot)} – {fmt_px(tp.zone_top)}</span>
           &nbsp; STRENGTH <span class='stars'>{"★" * tp.stars}</span><span class='mut'>{"☆" * (5 - tp.stars)}</span><br>
@@ -500,7 +541,8 @@ if failed:
     foot += f" · skipped {len(failed)}"
 st.caption(foot)
 if failed and not results:
-    reasons = {LAST_ERRORS.get(s, "unknown") for s in failed}
+    _all_err = {**LAST_ERRORS, **CRYPTO_ERRORS}
+    reasons = {_all_err.get(s, "unknown") for s in failed}
     print("FETCH DIAGNOSTICS:", "; ".join(sorted(reasons)))  # server logs only
     st.error("Data sources are unreachable right now — please try again in a "
              "few minutes. (Details logged for the operator.)")
