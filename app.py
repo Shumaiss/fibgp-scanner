@@ -21,7 +21,8 @@ import pandas as pd
 import streamlit as st
 
 from fibgp_engine import FibGPEngine, EngineResult
-from psx_fetch import fetch_daily, LAST_ERRORS, CACHE_DIR
+from psx_fetch import (fetch_daily, LAST_ERRORS, CACHE_DIR,
+                       repo_symbols, repo_meta)
 from crypto_fetch import (fetch_daily_crypto, list_symbols,
                           LAST_ERRORS as CRYPTO_ERRORS)
 from symbols import ALL_PSX, KSE100, QUICK25
@@ -233,7 +234,7 @@ with st.sidebar:
         symbols = sorted({s.strip().upper() for s in
                           custom_txt.replace("\n", ",").split(",") if s.strip()})
     elif universe_choice == "All PSX":
-        symbols = ALL_PSX
+        symbols = repo_symbols() or ALL_PSX
     elif universe_choice == "KSE-100":
         symbols = KSE100
     elif universe_choice == "Quick 25":
@@ -558,8 +559,10 @@ with right:
 
 # ============================== FOOTER =========================================
 _tf_name = "Weekly" if st.session_state.get("scan_tf") == "1w" else "Daily"
+_meta = repo_meta() if st.session_state.get("scan_market", "psx") == "psx" else None
+_fresh = f" · PSX data as of {_meta['last_trading_date']}" if _meta else ""
 foot = (f"Universe: {universe_choice} · Timeframe: {_tf_name} · "
-        f"Data: EOD (cached) · Scanned {len(results)}/{tot}")
+        f"Data: EOD (cached){_fresh} · Scanned {len(results)}/{tot}")
 if failed:
     foot += f" · skipped {len(failed)}"
 st.caption(foot)
