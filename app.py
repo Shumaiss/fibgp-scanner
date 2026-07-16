@@ -251,7 +251,7 @@ with st.sidebar:
 
     with st.expander("Engine parameters"):
         piv_l = st.number_input("Pivot left bars", 1, 20, 5)
-        piv_r = st.number_input("Pivot right bars", 1, 20, 5)
+        piv_r = st.number_input("Pivot right bars", 1, 20, 3)
         use_live = st.checkbox("Use live (unconfirmed) endpoint", True)
         use_ema = st.checkbox("EMA confluence", True)
         use_fvg = st.checkbox("FVG confluence", True)
@@ -313,7 +313,7 @@ def run_full_scan(syms, start, engine, thr, market, tf):
     to_fetch = [s for s in syms if (s, key) not in st.session_state.ohlc_cache]
     done = 0
     if to_fetch:
-        workers = 4 if market == "psx" else 8
+        workers = 2 if market == "psx" else 8
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {ex.submit(_fetch, s): s for s in to_fetch}
             for fut in as_completed(futs):
@@ -563,13 +563,33 @@ foot = (f"Universe: {universe_choice} · Timeframe: {_tf_name} · "
 if failed:
     foot += f" · skipped {len(failed)}"
 st.caption(foot)
-if failed and not results:
+if failed:
     _all_err = {**LAST_ERRORS, **CRYPTO_ERRORS}
     reasons = {_all_err.get(s, "unknown") for s in failed}
-    print("FETCH DIAGNOSTICS:", "; ".join(sorted(reasons)))  # server logs only
-    st.error("Data sources are unreachable right now — please try again in a "
-             "few minutes. (Details logged for the operator.)")
+    print("FETCH DIAGNOSTICS:", "; ".join(sorted(reasons)), flush=True)  # server logs
+    if not results:
+        st.error("Data sources are unreachable right now — please try again in a "
+                 "few minutes. (Details logged for the operator.)")
+    elif len(failed) > max(3, len(results) // 4):
+        st.warning(f"{len(failed)} symbols couldn't be fetched this scan — "
+                   f"likely source rate limiting. Cached symbols are unaffected; "
+                   f"rescan in a few minutes to fill the gaps. "
+                   f"(Details logged for the operator.)")
 with st.expander(f"Skipped symbols ({len(failed)})" if failed else "Skipped symbols (0)"):
     if failed:
         st.markdown(f"<span class='mut' style='font-size:.72rem'>{', '.join(failed)}</span>",
                     unsafe_allow_html=True)
+
+# ---- operator diagnostics: open the app URL with ?ops=wh4le-ops ----
+if st.query_params.get("ops") == "wh4le-ops":
+    with st.expander("OPERATOR DIAGNOSTICS", expanded=True):
+        _all_err = {**LAST_ERRORS, **CRYPTO_ERRORS}
+        if failed:
+            _summary = {}
+            for s in failed:
+                r = _all_err.get(s, "unknown")
+                _summary[r] = _summary.get(r, 0) + 1
+            for r, n in sorted(_summary.items(), key=lambda x: -x[1]):
+                st.markdown(f"`{n}x` {r}")
+        else:
+            st.markdown("No failures in the last scan.")
