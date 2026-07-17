@@ -28,20 +28,21 @@ from crypto_fetch import (fetch_daily_crypto, list_symbols,
 from symbols import ALL_PSX, KSE100, QUICK25
 
 # ============================== PALETTE ========================================
-BG     = "#0A1216"
-PANEL  = "#0E1B21"
-PANEL2 = "#122430"
-LINE   = "#1B3340"
-MINT   = "#00E5B0"
-MINTD  = "#0E4D42"
-RED    = "#FF5A66"
-AMBER  = "#FFC24D"
-TXT    = "#D8E4E4"
-MUTE   = "#6E8891"
+BG     = "#0A0A0B"
+PANEL  = "#101012"
+PANEL2 = "#17171A"
+LINE   = "#242429"
+MINT   = "#FFFFFF"          # primary accent (monochrome)
+MINTD  = "#2E2E33"
+RED    = "#9A9AA3"          # secondary emphasis
+AMBER  = "#6E6E78"          # tertiary emphasis
+TXT    = "#E8E8EC"
+MUTE   = "#7A7A85"
+DIM    = "#4A4A52"
 
 PAGE_SIZE = 15
 
-st.set_page_config(page_title="PSX Whale Screener", page_icon="🐋",
+st.set_page_config(page_title="PSX Whale Screener", page_icon="◆",
                    layout="wide", initial_sidebar_state="expanded")
 
 st.markdown(f"""
@@ -75,15 +76,15 @@ table.scan tr:last-child td {{ border-bottom:none; }}
 .tick {{ color:{MINT}; font-weight:700; }}
 .badge {{ display:inline-block; padding:2px 9px; border-radius:5px; font-size:.62rem;
   letter-spacing:.08em; font-weight:700; }}
-.b-insup  {{ background:rgba(0,229,176,.15); color:{MINT}; border:1px solid rgba(0,229,176,.5); }}
-.b-nearsup{{ background:transparent; color:{MINT}; border:1px solid rgba(0,229,176,.35); }}
-.b-inres  {{ background:rgba(255,90,102,.15); color:{RED}; border:1px solid rgba(255,90,102,.5); }}
-.b-nearres{{ background:transparent; color:{RED}; border:1px solid rgba(255,90,102,.35); }}
+.b-insup  {{ background:#FFFFFF; color:#0A0A0B; border:1px solid #FFFFFF; font-weight:800; }}
+.b-nearsup{{ background:transparent; color:{TXT}; border:1px solid #FFFFFF; }}
+.b-inres  {{ background:#FFFFFF; color:#0A0A0B; border:1px solid #FFFFFF; font-weight:800; }}
+.b-nearres{{ background:transparent; color:{TXT}; border:1px solid #FFFFFF; }}
 .b-watch  {{ background:transparent; color:{MUTE}; border:1px solid {LINE}; }}
-.b-nozone {{ background:transparent; color:{MUTE}; border:1px dashed {LINE}; }}
-.stars {{ color:{AMBER}; letter-spacing:.05em; }}
+.b-nozone {{ background:transparent; color:{DIM}; border:1px dashed {LINE}; }}
+.stars {{ color:#FFFFFF; letter-spacing:.05em; }}
 .mut {{ color:{MUTE}; }}
-.dgreen {{ color:{MINT}; }} .dred {{ color:{RED}; }} .damber {{ color:{AMBER}; }}
+.dgreen {{ color:#FFFFFF; }} .dred {{ color:#9A9AA3; }} .damber {{ color:#9A9AA3; }}
 
 .legend {{ font-size:.72rem; line-height:1.9; }}
 .dot {{ display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:7px; }}
@@ -119,10 +120,10 @@ class Row:
 
 
 BADGE = {
-    "IN_SUPPORT":      ("IN SUPPORT", "b-insup"),
-    "NEAR_SUPPORT":    ("NEAR SUPPORT", "b-nearsup"),
-    "IN_RESISTANCE":   ("IN RESIST", "b-inres"),
-    "NEAR_RESISTANCE": ("NEAR RESIST", "b-nearres"),
+    "IN_SUPPORT":      ("▲ IN SUPPORT", "b-insup"),
+    "NEAR_SUPPORT":    ("▲ NEAR SUPPORT", "b-nearsup"),
+    "IN_RESISTANCE":   ("▼ IN RESIST", "b-inres"),
+    "NEAR_RESISTANCE": ("▼ NEAR RESIST", "b-nearres"),
     "WATCHING":        ("WATCHING", "b-watch"),
     "NO_ZONE":         ("NO ZONE", "b-nozone"),
 }
@@ -173,7 +174,7 @@ def sparkline(closes: np.ndarray, w: int = 92, h: int = 26) -> str:
     rng = (hi - lo) or 1.0
     pts = " ".join(f"{i * w / (len(v) - 1):.1f},{h - 2 - (x - lo) / rng * (h - 4):.1f}"
                    for i, x in enumerate(v))
-    col = MINT if v[-1] >= v[0] else RED
+    col = "#E4E4E9" if v[-1] >= v[0] else "#55555E"
     return (f"<svg width='{w}' height='{h}' viewBox='0 0 {w} {h}'>"
             f"<polyline points='{pts}' fill='none' stroke='{col}' "
             f"stroke-width='1.5' stroke-linejoin='round'/></svg>")
@@ -183,7 +184,8 @@ def donut(counts: dict[str, int]) -> str:
     total = sum(counts.values()) or 1
     R, CX, CY, SW = 40, 55, 55, 15
     circ = 2 * math.pi * R
-    colors = {"In zone": MINT, "Near zone": RED, "Watching": AMBER, "No zone / n.a.": MUTE}
+    colors = {"In zone": "#FFFFFF", "Near zone": "#9A9AA3",
+              "Watching": "#55555E", "No zone / n.a.": "#2A2A2F"}
     segs, off = "", 0.0
     for k, v in counts.items():
         frac = v / total
@@ -217,18 +219,18 @@ def fmt_px(v: float) -> str:
 
 # ============================== SIDEBAR ========================================
 with st.sidebar:
-    st.markdown(f"<div class='hd-title'>🐋 PSX <span class='m'>WHALE</span></div>"
+    st.markdown(f"<div class='hd-title'>◆ PSX <span class='m'>WHALE</span></div>"
                 f"<div class='hd-sub'>SCREENER · KEY LEVELS · DAILY</div>",
                 unsafe_allow_html=True)
     st.write("")
     universe_choice = st.radio("Universe",
                                ["All PSX", "KSE-100", "Quick 25",
-                                "Crypto Spot", "Crypto Perps", "Custom"])
+                                "Crypto Spot", "Custom"])
     market = "psx"
     symbols: list | None = None
     if universe_choice == "Custom":
-        market_lbl = st.selectbox("Market", ["PSX", "Crypto Spot", "Crypto Perps"])
-        market = {"PSX": "psx", "Crypto Spot": "spot", "Crypto Perps": "perp"}[market_lbl]
+        market_lbl = st.selectbox("Market", ["PSX", "Crypto Spot"])
+        market = {"PSX": "psx", "Crypto Spot": "spot"}[market_lbl]
         default_syms = "HBL, UBL, OGDC" if market == "psx" else "BTCUSDT, ETHUSDT, SOLUSDT"
         custom_txt = st.text_area("Symbols", value=default_syms, height=80)
         symbols = sorted({s.strip().upper() for s in
@@ -241,8 +243,6 @@ with st.sidebar:
         symbols = QUICK25
     elif universe_choice == "Crypto Spot":
         market = "spot"       # full pair list resolved at scan time
-    else:
-        market = "perp"
 
     timeframe = st.radio("Timeframe", ["Daily", "Weekly"], horizontal=True)
     tf = "1w" if timeframe == "Weekly" else "1d"
@@ -504,7 +504,8 @@ with right:
     # ---- market momentum ----
     buys = sum(1 for r in rows if r.stoch_sig == "BUY")
     ratio = buys / len(rows) if rows else 0.5
-    mood = ("Bullish", MINT) if ratio > 0.55 else (("Bearish", RED) if ratio < 0.45 else ("Neutral", AMBER))
+    mood = ("Bullish ↑", "#FFFFFF") if ratio > 0.55 else \
+        (("Bearish ↓", "#FFFFFF") if ratio < 0.45 else ("Neutral →", "#FFFFFF"))
     st.markdown(f"""<div class='panel'>
       <div class='panel-hd mut'>MARKET MOMENTUM</div>
       <div style='font-family:Rajdhani;font-size:1.4rem;font-weight:700;color:{mood[1]}'>{mood[0]}</div>
@@ -518,7 +519,8 @@ with right:
     leg = "".join(
         f"<div><span class='dot' style='background:{c}'></span>{k} "
         f"<span class='mut'>{v} {pct(v)}</span></div>"
-        for (k, v), c in zip(counts.items(), (MINT, RED, AMBER, MUTE)))
+        for (k, v), c in zip(counts.items(),
+                             ("#FFFFFF", "#9A9AA3", "#55555E", "#2A2A2F")))
     st.markdown(f"""<div class='panel'>
       <div class='panel-hd'>SUMMARY</div>
       <div style='display:flex;gap:14px;align-items:center'>
