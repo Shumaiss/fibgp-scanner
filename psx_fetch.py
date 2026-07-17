@@ -1,5 +1,5 @@
 """
-psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v3.0)
+psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v3.1)
 
 v2.0: SCSTrade (scstrade.com) is now the PRIMARY source — one JSON request
 per symbol for the full history, and it doesn't block cloud hosts the way
@@ -11,6 +11,8 @@ Volume floats. Failure reasons per symbol land in LAST_ERRORS.
 
 v2.1: dual primary hosts + same-day disk cache.
 v2.2: circuit breakers + polite pacing.
+v3.1: stale-serve — when every source fails, the most recent cached data
+(up to 7 days old) is served with a freshness note instead of nothing.
 v3.0: GitHub data repository becomes the PRIMARY source — a daily updater
 running on the operator's PC publishes official EOD data for every symbol
 to a public data repo; the app reads that one file (fast, never blocked,
@@ -298,6 +300,35 @@ def _cache_read(symbol: str, start: date, end: date) -> pd.DataFrame | None:
         return None
 
 
+# symbols served from an older cache during an outage: symbol -> as-of date
+STALE_NOTES: dict[str, str] = {}
+
+
+def _cache_read_stale(symbol: str, start: date) -> tuple[pd.DataFrame | None, str | None]:
+    """Most recent cache file for this symbol/window with any end date in the
+    last 7 days — outage fallback."""
+    try:
+        import glob
+        pattern = os.path.join(CACHE_DIR, f"{symbol}_{start.isoformat()}_*.csv")
+        best, best_end = None, None
+        for p in glob.glob(pattern):
+            end_s = p.rsplit("_", 1)[-1][:-4]
+            try:
+                end_d = date.fromisoformat(end_s)
+            except ValueError:
+                continue
+            if (date.today() - end_d).days <= 7 and (best_end is None or end_d > best_end):
+                best, best_end = p, end_d
+        if best is None:
+            return None, None
+        df = pd.read_csv(best, index_col=0, parse_dates=True)
+        if {"Open", "High", "Low", "Close"}.issubset(df.columns) and len(df):
+            return df, best_end.isoformat()
+    except Exception:
+        pass
+    return None, None
+
+
 def _cache_write(symbol: str, start: date, end: date, df: pd.DataFrame):
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
@@ -384,19 +415,29 @@ def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFra
     cached = _cache_read(symbol, start, end)
     if cached is not None:
         LAST_ERRORS.pop(symbol, None)
+        STALE_NOTES.pop(symbol, None)
         return cached
     df = fetch_repo(symbol, start, end)
     if df is not None:
+        STALE_NOTES.pop(symbol, None)
         return df
     df = fetch_scstrade(symbol, start, end)
     if df is not None:
         _cache_write(symbol, start, end, df)
+        STALE_NOTES.pop(symbol, None)
         return df
     scs_err = LAST_ERRORS.get(symbol, "SCS failed")
     df = fetch_psx(symbol, start, end)
     if df is not None:
         _cache_write(symbol, start, end, df)
+        STALE_NOTES.pop(symbol, None)
         return df
     psx_err = LAST_ERRORS.get(symbol, "PSX failed")
+    # ---- all sources down: serve the last good data we have (≤7 days) ----
+    stale, asof = _cache_read_stale(symbol, start)
+    if stale is not None:
+        LAST_ERRORS.pop(symbol, None)
+        STALE_NOTES[symbol] = asof
+        return stale
     LAST_ERRORS[symbol] = f"{scs_err} | {psx_err}"
     return None

@@ -22,7 +22,7 @@ import streamlit as st
 
 from fibgp_engine import FibGPEngine, EngineResult
 from psx_fetch import (fetch_daily, LAST_ERRORS, CACHE_DIR,
-                       repo_symbols, repo_meta)
+                       repo_symbols, repo_meta, STALE_NOTES)
 from crypto_fetch import (fetch_daily_crypto, list_symbols,
                           LAST_ERRORS as CRYPTO_ERRORS)
 from symbols import ALL_PSX, KSE100, QUICK25
@@ -566,6 +566,12 @@ foot = (f"Universe: {universe_choice} · Timeframe: {_tf_name} · "
 if failed:
     foot += f" · skipped {len(failed)}"
 st.caption(foot)
+_stale = {s: d for s, d in STALE_NOTES.items() if s in results}
+if _stale:
+    _oldest = min(_stale.values())
+    st.info(f"Live sources are temporarily unavailable — showing the last "
+            f"available data (as of {_oldest}) for {len(_stale)} symbols. "
+            f"Rescan later for fresh prices.")
 if failed:
     _all_err = {**LAST_ERRORS, **CRYPTO_ERRORS}
     reasons = {_all_err.get(s, "unknown") for s in failed}

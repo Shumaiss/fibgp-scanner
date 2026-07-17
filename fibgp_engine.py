@@ -1,10 +1,20 @@
 """
 fibgp_engine.py — Faithful Python port of the Trader Pro zone engine
-(FibGP v11.5.3 base + minimum-leg ATR filter).
+(FibGP v11.5.3 base + Trader Pro strategy updates).
 
-Ported line-for-line from the Pine Script v6 source. The Trader Pro update
-adds one strategy change: a leg only qualifies for a zone when its span is
-at least MIN_LEG_ATR × ATR(14) — small noise legs no longer form zones. Execution model mirrors Pine exactly: the engine is a
+Ported line-for-line from the Pine Script v6 source. Trader Pro changes vs
+the v11.5.3 base:
+  • Asymmetric pivots: left=5, right=3 (faster zone confirmation)
+  • Minimum-leg filter: a leg qualifies only if span >= MIN_LEG_ATR × ATR(14)
+  • Cleared-anchor freshness: once a zone is broken/passed-through, only
+    legs anchored strictly AFTER it may supply the next zone on that side
+  • Leg extension: a found pivot pair extends forward through newer pivots
+    to the full swing extreme (stops when the structure breaks) — stair-step
+    trends form one full-structure leg
+  • Upside targets removed (1.4/1.7/2.4/3.4 extensions dropped)
+  • Stochastic health score is frozen at the cross (marker formula:
+    extreme zone, momentum, K-velocity); live score and ⚠ near-cross
+    warning removed. RSI(7) retained as scanner-side analytics. Execution model mirrors Pine exactly: the engine is a
 bar-by-bar state machine fed one OHLCV bar at a time, in chronological order.
 
 Ported components:
@@ -39,7 +49,7 @@ import numpy as np
 # ============================== DEFAULT INPUTS ================================
 # Mirrors the Pine input() defaults exactly.
 PIV_LEFT = 5
-PIV_RIGHT = 5
+PIV_RIGHT = 3
 USE_LIVE = True
 MAX_PIVOTS = 80
 
@@ -53,7 +63,6 @@ STOCH_K_SMOOTH = 3
 STOCH_D = 3
 STOCH_NEAR = 5.0
 
-EXT_LEVELS = (1.4, 1.7, 2.4, 3.4)
 
 EMA_LENS = (8, 34, 50, 100, 200)
 
@@ -406,6 +415,7 @@ class FibGPEngine:
         a_sup_leg_lo = math.nan; a_sup_leg_hi = math.nan
         a_sup_hits = 0; a_sup_inside = False
         a_sup_closed_above = False; a_sup_closed_below = False
+        sup_cleared_anc = None   # anchor of last support cleared downward
 
         # ---- active zone state (resistance) ----
         a_res_top = math.nan; a_res_bot = math.nan; a_res_anc = -1
@@ -413,9 +423,13 @@ class FibGPEngine:
         a_res_hits = 0; a_res_inside = False
         a_res_closed_above = False; a_res_closed_below = False
 
+        # ---- cleared-anchor freshness state ("no reaching backward") ----
+        sup_cleared_anc: int | None = None
+        res_cleared_anc: int | None = None
+
         # ---- stochastic persistent signal state ----
         stoch_signal = "—"
-        stoch_cross_k = math.nan
+        stoch_frozen_score = 0
 
         entered_sup_today = False
         entered_res_today = False
@@ -465,10 +479,19 @@ class FibGPEngine:
                 for j in range(m - 1, 0, -1):
                     if w_kind[j] == 1 and w_kind[j - 1] == -1:
                         hi_v = w_val[j]; lo_v = w_val[j - 1]; hi_t = w_time[j]
+                        # leg extension: walk newer pivots; extend the high
+                        # until a newer pivot low undercuts the leg low
+                        if j < m - 1:
+                            for k in range(j + 1, m):
+                                if w_kind[k] == -1 and w_val[k] < lo_v:
+                                    break
+                                if w_kind[k] == 1 and w_val[k] > hi_v:
+                                    hi_v = w_val[k]; hi_t = w_time[k]
                         chrono_ok = hi_t > w_time[j - 1]
+                        fresh_ok = sup_cleared_anc is None or hi_t > sup_cleared_anc
                         rng = hi_v - lo_v
                         leg_ok = math.isnan(atr14[i]) or rng >= self.min_leg_atr * atr14[i]
-                        if rng > 0 and chrono_ok and leg_ok:
+                        if rng > 0 and chrono_ok and leg_ok and fresh_ok:
                             c_top = hi_v - 0.618 * rng
                             c_bot = hi_v - 0.786 * rng
                             if c_bot <= c and not self._sup_stale(close, i, hi_t, c_bot):
@@ -485,10 +508,19 @@ class FibGPEngine:
                 for j in range(m - 1, 0, -1):
                     if w_kind[j] == -1 and w_kind[j - 1] == 1:
                         lo_v = w_val[j]; hi_v = w_val[j - 1]; lo_t = w_time[j]
+                        # leg extension: walk newer pivots; extend the low
+                        # until a newer pivot high exceeds the leg high
+                        if j < m - 1:
+                            for k in range(j + 1, m):
+                                if w_kind[k] == 1 and w_val[k] > hi_v:
+                                    break
+                                if w_kind[k] == -1 and w_val[k] < lo_v:
+                                    lo_v = w_val[k]; lo_t = w_time[k]
                         chrono_ok = lo_t > w_time[j - 1]
+                        fresh_ok = res_cleared_anc is None or lo_t > res_cleared_anc
                         rng = hi_v - lo_v
                         leg_ok = math.isnan(atr14[i]) or rng >= self.min_leg_atr * atr14[i]
-                        if rng > 0 and chrono_ok and leg_ok:
+                        if rng > 0 and chrono_ok and leg_ok and fresh_ok:
                             c_bot = lo_v + 0.618 * rng
                             c_top = lo_v + 0.786 * rng
                             if c_top >= c and not self._res_stale(close, i, lo_t, c_top):
@@ -507,6 +539,7 @@ class FibGPEngine:
             sup_passed = (not math.isnan(a_sup_top)) and a_sup_closed_above and a_sup_closed_below
             sup_broken = (not math.isnan(a_sup_bot)) and c < a_sup_bot
             if sup_broken or sup_passed:
+                sup_cleared_anc = a_sup_anc   # no reaching backward
                 a_sup_top = math.nan; a_sup_bot = math.nan; a_sup_anc = -1
                 a_sup_leg_lo = math.nan; a_sup_leg_hi = math.nan
                 a_sup_hits = 0; a_sup_inside = False
@@ -540,6 +573,7 @@ class FibGPEngine:
             res_passed = (not math.isnan(a_res_top)) and a_res_closed_above and a_res_closed_below
             res_broken = (not math.isnan(a_res_top)) and c > a_res_top
             if res_broken or res_passed:
+                res_cleared_anc = a_res_anc   # no reaching backward
                 a_res_top = math.nan; a_res_bot = math.nan; a_res_anc = -1
                 a_res_leg_lo = math.nan; a_res_leg_hi = math.nan
                 a_res_hits = 0; a_res_inside = False
@@ -578,10 +612,19 @@ class FibGPEngine:
             if not any(math.isnan(x) for x in (k_now, k_prev, d_now, d_prev)):
                 cross_up = k_prev <= d_prev and k_now > d_now
                 cross_dn = k_prev >= d_prev and k_now < d_now
-                if cross_up:
-                    stoch_signal = "BUY"; stoch_cross_k = k_now
-                elif cross_dn:
-                    stoch_signal = "SELL"; stoch_cross_k = k_now
+                if cross_up or cross_dn:
+                    is_buy = cross_up
+                    stoch_signal = "BUY" if is_buy else "SELL"
+                    # frozen-at-cross health score (chart marker formula)
+                    sc = 0
+                    if (is_buy and k_now < 20) or (not is_buy and k_now > 80):
+                        sc += 1
+                    if (is_buy and close[i] > close[i - 1]) or \
+                       (not is_buy and close[i] < close[i - 1]):
+                        sc += 1
+                    if abs(k_now - k_prev) > 5:
+                        sc += 1
+                    stoch_frozen_score = sc
 
         # =================== FINAL-BAR OUTPUT (render equivalent) ===============
         last = n - 1
@@ -609,46 +652,13 @@ class FibGPEngine:
             if self.use_fvg_conf:
                 res_fvg = self._fvg_in_zone(high, low, last, resistance.top, resistance.bot)
 
-        # ---- upside targets: resistance leg preferred, else support leg ----
-        targets = []
-        ext_lo = ext_hi = math.nan
-        if resistance is not None:
-            ext_lo, ext_hi = resistance.leg_lo, resistance.leg_hi
-        elif support is not None:
-            ext_lo, ext_hi = support.leg_lo, support.leg_hi
-        if not math.isnan(ext_lo):
-            ext_rng = ext_hi - ext_lo
-            for lv in EXT_LEVELS:
-                px = ext_lo + lv * ext_rng
-                pass_filter = resistance is None or px > resistance.top
-                if pass_filter:
-                    targets.append((lv, px))
-
-        # ---- stochastic final state ----
+        # ---- stochastic final state (Trader Pro: score frozen at cross,
+        #      no live score, no near-cross warning) ----
         st = StochState()
         st.k = k_series[last]
         st.d = d_series[last]
         st.signal = stoch_signal
-        if stoch_signal != "—":
-            score = 0
-            extreme_hit = ((stoch_signal == "BUY" and not math.isnan(stoch_cross_k) and stoch_cross_k < 20)
-                           or (stoch_signal == "SELL" and not math.isnan(stoch_cross_k) and stoch_cross_k > 80))
-            if extreme_hit:
-                score += 1
-            gap = abs(st.k - st.d) if not (math.isnan(st.k) or math.isnan(st.d)) else 0.0
-            if gap > 10:
-                score += 1
-            momentum_ok = ((stoch_signal == "BUY" and close[last] > close[last - 1])
-                           or (stoch_signal == "SELL" and close[last] < close[last - 1]))
-            if momentum_ok:
-                score += 1
-            st.score = score
-        if not (math.isnan(st.k) or math.isnan(st.d)):
-            gap = abs(st.k - st.d)
-            k_prev = k_series[last - 1]
-            if not math.isnan(k_prev) and gap < STOCH_NEAR:
-                st.near_bull = st.k < st.d and st.k > k_prev
-                st.near_bear = st.k > st.d and st.k < k_prev
+        st.score = stoch_frozen_score if stoch_signal != "—" else 0
 
         return EngineResult(
             support=support,
@@ -660,7 +670,6 @@ class FibGPEngine:
             sup_fvg=sup_fvg,
             res_ema_tag=res_ema_tag,
             res_fvg=res_fvg,
-            upside_targets=targets,
             entered_sup_today=entered_sup_today,
             entered_res_today=entered_res_today,
             n_bars=n,
