@@ -1,5 +1,5 @@
 """
-psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v3.1)
+psx_fetch.py — Daily OHLCV fetcher for Pakistan Stock Exchange. (v3.2)
 
 v2.0: SCSTrade (scstrade.com) is now the PRIMARY source — one JSON request
 per symbol for the full history, and it doesn't block cloud hosts the way
@@ -11,6 +11,9 @@ Volume floats. Failure reasons per symbol land in LAST_ERRORS.
 
 v2.1: dual primary hosts + same-day disk cache.
 v2.2: circuit breakers + polite pacing.
+v3.2: relay route — as a last resort, the official PSX pages are fetched
+through a public request relay so the origin IP is the relay's, not the
+blocked cloud host's. Breaker-guarded (tag P3), polite pacing, single retry.
 v3.1: stale-serve — when every source fails, the most recent cached data
 (up to 7 days old) is served with a freshness note instead of nothing.
 v3.0: GitHub data repository becomes the PRIMARY source — a daily updater
@@ -48,7 +51,8 @@ P1_DELAY = 0.30               # primary-provider pacing (per symbol request)
 _BREAK_AFTER = 5              # consecutive full-symbol failures to trip
 _COOLDOWN = 180.0             # seconds a tripped source stays closed
 _state = {"p1_fails": 0, "p1_down_until": 0.0,
-          "p2_fails": 0, "p2_down_until": 0.0}
+          "p2_fails": 0, "p2_down_until": 0.0,
+          "p3_fails": 0, "p3_down_until": 0.0}
 _state_lock = threading.Lock()
 
 
@@ -337,6 +341,93 @@ def _cache_write(symbol: str, start: date, end: date, df: pd.DataFrame):
         pass
 
 
+# ========================= RELAY ROUTE (LAST RESORT) =======================
+from urllib.parse import quote
+
+RELAY_PREFIX = "https://corsproxy.io/?url="
+P3_DELAY = 0.40
+
+
+def _p3_month(symbol: str, d: date, timeout: float = 25.0):
+    """One monthly page via the relay: same endpoint, relayed origin."""
+    target = f"{PSX_HIST}"
+    url = RELAY_PREFIX + quote(target, safe="")
+    payload = {"month": d.month, "year": d.year, "symbol": symbol}
+    try:
+        r = _session().post(url, data=payload, timeout=timeout,
+                            headers={"X-Requested-With": "XMLHttpRequest"})
+        if r.status_code != 200:
+            return None, f"P3 HTTP {r.status_code}"
+        soup = BeautifulSoup(r.text, "html.parser")
+        hdrs = [th.get_text(strip=True) for th in soup.select("th")]
+        if not hdrs:
+            return None, "P3 empty month"
+        rows = [[td.get_text(strip=True) for td in tr.select("td")]
+                for tr in soup.select("tr")]
+        rows = [x for x in rows if len(x) == len(hdrs)]
+        if not rows:
+            return None, "P3 empty month"
+        return pd.DataFrame(rows, columns=hdrs), None
+    except requests.RequestException as e:
+        detail = str(e.args[0]) if e.args else str(e)
+        return None, f"P3 {type(e).__name__}: {detail[:100]}"
+
+
+def fetch_relay(symbol: str, start: date, end: date) -> pd.DataFrame | None:
+    """PSX monthly pages via the relay. Same parsing as the direct route."""
+    if _breaker_open("p3"):
+        LAST_ERRORS[symbol] = "P3 cooling down (breaker open)"
+        return None
+    cur = date(start.year, start.month, 1)
+    months = [cur]
+    while True:
+        cur = cur + relativedelta(months=1)
+        if cur > end:
+            break
+        months.append(cur)
+
+    frames, errs = [], []
+    for m in months:
+        df, err = _p3_month(symbol, m)
+        if df is not None:
+            frames.append(df)
+        elif err and "empty month" not in err:
+            errs.append(err)
+            if len(errs) >= 2 and not frames:
+                break
+        time.sleep(P3_DELAY)
+
+    if not frames:
+        LAST_ERRORS[symbol] = errs[0] if errs else "P3 no rows returned"
+        _breaker_report("p3", False)
+        return None
+    df = pd.concat(frames, ignore_index=True)
+    date_col = next((c for c in df.columns
+                     if c.strip().upper() in ("TIME", "DATE")), None)
+    if date_col is None:
+        LAST_ERRORS[symbol] = f"P3 unexpected columns: {list(df.columns)[:6]}"
+        _breaker_report("p3", False)
+        return None
+    parsed = pd.to_datetime(df[date_col], format="%b %d, %Y", errors="coerce")
+    if parsed.isna().mean() > 0.5:
+        parsed = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+    df["Date"] = parsed
+    df = df.dropna(subset=["Date"]).set_index("Date")
+    df = df.rename(columns=str.title)
+    keep = [c for c in ("Open", "High", "Low", "Close", "Volume") if c in df.columns]
+    if len(keep) < 4:
+        LAST_ERRORS[symbol] = f"P3 missing OHLC columns: have {keep}"
+        _breaker_report("p3", False)
+        return None
+    df = df[keep]
+    for col in keep:
+        df[col] = (df[col].astype(str).str.replace(",", "", regex=False)
+                   .replace({"": np.nan, "-": np.nan}).astype(float))
+    out = _finalize(df, start, end, symbol)
+    _breaker_report("p3", out is not None)
+    return out
+
+
 # ====================== GITHUB DATA REPO (PRIMARY) =========================
 import io
 import gzip
@@ -433,11 +524,17 @@ def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFra
         STALE_NOTES.pop(symbol, None)
         return df
     psx_err = LAST_ERRORS.get(symbol, "PSX failed")
+    df = fetch_relay(symbol, start, end)
+    if df is not None:
+        _cache_write(symbol, start, end, df)
+        STALE_NOTES.pop(symbol, None)
+        return df
+    p3_err = LAST_ERRORS.get(symbol, "P3 failed")
     # ---- all sources down: serve the last good data we have (≤7 days) ----
     stale, asof = _cache_read_stale(symbol, start)
     if stale is not None:
         LAST_ERRORS.pop(symbol, None)
         STALE_NOTES[symbol] = asof
         return stale
-    LAST_ERRORS[symbol] = f"{scs_err} | {psx_err}"
+    LAST_ERRORS[symbol] = f"{scs_err} | {psx_err} | {p3_err}"
     return None
