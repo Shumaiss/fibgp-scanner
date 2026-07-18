@@ -90,7 +90,13 @@ table.scan td {{ padding:9px 9px; border-bottom:1px solid rgba(255,255,255,.045)
   white-space:nowrap; vertical-align:middle; }}
 table.scan tr:hover td {{ background:rgba(255,255,255,.028); }}
 table.scan tr:last-child td {{ border-bottom:none; }}
-.tick {{ color:#FFFFFF; font-weight:800; letter-spacing:.02em; }}
+.tick {{ color:#FFFFFF; font-weight:800; letter-spacing:.02em;
+  text-decoration:none; }}
+a.tick:hover {{ text-decoration:underline; text-underline-offset:3px; }}
+a.sym {{ text-decoration:none; }}
+a.sym:hover {{ text-decoration:underline; text-underline-offset:4px; }}
+.goto {{ opacity:0; font-size:.7em; margin-left:3px; transition:opacity .12s; }}
+a:hover .goto {{ opacity:.85; }}
 .badge {{ display:inline-block; padding:2px 9px; border-radius:5px; font-size:.6rem;
   letter-spacing:.1em; font-weight:700; }}
 .b-insup  {{ background:#FFFFFF; color:#0A0A0B; border:1px solid #FFFFFF; font-weight:800; }}
@@ -227,6 +233,17 @@ def donut(counts: dict[str, int]) -> str:
             f"font-size='17' font-weight='700' font-family='Rajdhani'>{total}</text>"
             f"<text x='{CX}' y='{CY + 13}' text-anchor='middle' fill='{MUTE}' "
             f"font-size='8'>SCANNED</text></svg>")
+
+
+def tv_link(symbol: str) -> str:
+    """Chart URL for a ticker: crypto perps get the .P futures symbol,
+    PSX tickers the PSX: prefix. Weekly scans open weekly charts."""
+    market = st.session_state.get("scan_market", "psx")
+    tf = st.session_state.get("scan_tf", "1d")
+    iv = "1W" if tf == "1w" else "1D"
+    tv_sym = f"MEXC:{symbol}.P" if market != "psx" else f"PSX:{symbol}"
+    return (f"https://www.tradingview.com/chart/?symbol={tv_sym}"
+            f"&interval={iv}")
 
 
 def fmt_vol(v: float) -> str:
@@ -510,7 +527,8 @@ with left:
         notional = float(df["Volume"].iloc[-1] * df["Close"].iloc[-1]) if df is not None else float("nan")
         new = " <span class='dgreen'>●</span>" if r.entered_today else ""
         body += (f"<tr><td class='mut'>{i}</td>"
-                 f"<td class='tick'>{r.symbol}{new}</td>"
+                 f"<td><a class='tick' href='{tv_link(r.symbol)}' "
+                 f"target='_blank' rel='noopener'>{r.symbol}<span class='goto'>↗</span></a>{new}</td>"
                  f"<td class='num'>{fmt_px(r.close)}</td>"
                  f"<td class='num mut'>{fmt_px(r.zone_bot)}</td>"
                  f"<td class='num mut'>{fmt_px(r.zone_top)}</td>"
@@ -597,7 +615,7 @@ with right:
         conf = f" · {tp.conf}" if tp.conf else ""
         st.markdown(f"""<div class='panel toppick'>
           <div class='panel-hd'><span class='damber'>★</span> TOP PICK</div>
-          <div class='sym'>{tp.symbol}</div>
+          <a class='sym' href='{tv_link(tp.symbol)}' target='_blank' rel='noopener'>{tp.symbol}<span class='goto'>↗</span></a>
           <div class='mut' style='font-size:.72rem'>{"in" if tp.dist == 0 else f"{tp.dist:.2f}% from"} {side_lbl} zone{conf}</div>
           <div class='px'>{fmt_px(tp.close)} <span class='mut' style='font-size:.8rem'>{"PKR" if st.session_state.get("scan_market","psx")=="psx" else "USDT"}</span></div>
           <div style='margin:6px 0'>{spark}</div>
