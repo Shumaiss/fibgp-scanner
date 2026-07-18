@@ -1,5 +1,5 @@
 """
-PSX Whale Screener — stocks & crypto trading in or near key levels. Daily.
+Whale Scanner — stocks & crypto trading in or near key levels.
 
 Terminal-style dashboard: stat cards, status-badge table with sparklines,
 summary donut, top pick card. Full-PSX universe support.
@@ -42,7 +42,7 @@ DIM    = "#4A4A52"
 
 PAGE_SIZE = 25
 
-st.set_page_config(page_title="PSX Whale Screener", page_icon="◆",
+st.set_page_config(page_title="Whale Scanner", page_icon="◆",
                    layout="wide", initial_sidebar_state="expanded")
 
 st.markdown(f"""
@@ -256,18 +256,18 @@ def fmt_px(v: float) -> str:
 
 # ============================== SIDEBAR ========================================
 with st.sidebar:
-    st.markdown(f"<div class='hd-title'>◆ PSX <span class='m'>WHALE</span></div>"
-                f"<div class='hd-sub'>SCREENER · KEY LEVELS · DAILY</div>",
+    st.markdown(f"<div class='hd-title'>◆ WHALE <span class='m'>SCANNER</span></div>"
+                f"<div class='hd-sub'>KEY LEVELS · DAILY / WEEKLY</div>",
                 unsafe_allow_html=True)
     st.write("")
     universe_choice = st.radio("Universe",
                                ["All PSX", "KSE-100", "Quick 25",
-                                "Crypto Spot", "Custom"])
+                                "Crypto", "Custom"])
     market = "psx"
     symbols: list | None = None
     if universe_choice == "Custom":
-        market_lbl = st.selectbox("Market", ["PSX", "Crypto Spot"])
-        market = {"PSX": "psx", "Crypto Spot": "spot"}[market_lbl]
+        market_lbl = st.selectbox("Market", ["PSX", "Crypto"])
+        market = {"PSX": "psx", "Crypto": "perp"}[market_lbl]
         default_syms = "HBL, UBL, OGDC" if market == "psx" else "BTCUSDT, ETHUSDT, SOLUSDT"
         custom_txt = st.text_area("Symbols", value=default_syms, height=80)
         symbols = sorted({s.strip().upper() for s in
@@ -278,8 +278,8 @@ with st.sidebar:
         symbols = KSE100
     elif universe_choice == "Quick 25":
         symbols = QUICK25
-    elif universe_choice == "Crypto Spot":
-        market = "spot"       # full pair list resolved at scan time
+    elif universe_choice == "Crypto":
+        market = "perp"       # full contract list resolved at scan time
 
     timeframe = st.radio("Timeframe", ["Daily", "Weekly"], horizontal=True)
     tf = "1w" if timeframe == "Weekly" else "1d"
@@ -409,7 +409,7 @@ if run_scan:
 # ============================== HEADER =========================================
 hd_l, hd_m, hd_r = st.columns([2.6, 1.6, 1.2])
 with hd_l:
-    st.markdown(f"<div class='hd-title'>PSX WHALE <span class='m'>SCREENER</span></div>"
+    st.markdown(f"<div class='hd-title'>WHALE <span class='m'>SCANNER</span></div>"
                 f"<div class='hd-rule'></div>"
                 f"<div class='hd-sub'>FIND STOCKS &amp; CRYPTO AT KEY LEVELS · DAILY / WEEKLY</div>",
                 unsafe_allow_html=True)

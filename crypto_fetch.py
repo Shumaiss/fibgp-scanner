@@ -1,20 +1,16 @@
 """
-crypto_fetch.py — Daily OHLCV fetcher for crypto (spot + USDT perpetuals). (v2.0)
+crypto_fetch.py — Crypto OHLCV fetcher, single-exchange edition. (v3.0)
 
-Primary and fallback market-data providers, no API keys required. Universe
-listings are pulled live from the exchange (all active USDT pairs, leveraged
-tokens and stable-vs-stable pairs excluded) and cached for the day. Candle
-data includes the current forming daily candle (matches chart platforms) and
-is disk-cached with a 15-minute TTL since crypto trades around the clock.
+One exchange only. PERPETUAL futures are the primary source (contract API);
+the same exchange's spot API is the automatic fallback so a missing or
+unreachable contract never blanks the scanner. Universe = all active USDT
+perpetual contracts (spot listing as fallback), leveraged tokens and
+stable-vs-stable pairs excluded.
 
-Provider names never surface in the UI — failure reasons per symbol land in
-LAST_ERRORS (server-side diagnostics only), tagged C1/C2/C3.
-
-v2.0: third provider (C3) added for breadth — its spot catalog is one of
-the largest anywhere and its v3 API mirrors C1's format. Universe = union
-of C1 + C3 listings; each symbol fetches from the exchange that lists it.
-C3's futures API is also wired in as a chance to serve the Perps universe
-from hosting where C1/C2 futures are geo-blocked.
+Candles include the current forming bar (matches chart platforms); disk
+cache TTL 15 min (crypto trades around the clock), listings cached daily.
+Provider names never surface in the UI — failure reasons land in
+LAST_ERRORS (server diagnostics only), tagged C-FUT / C-SPOT.
 """
 
 from __future__ import annotations
@@ -28,33 +24,27 @@ from datetime import date, datetime, timezone
 import pandas as pd
 import requests
 
-# ------------------------------- shared ---------------------------------
+# ------------------------------- config ---------------------------------
+PERP_HOST = "https://contract.mexc.com"
+SPOT_HOST = "https://api.mexc.com"
+
 _local = threading.local()
 LAST_ERRORS: dict[str, str] = {}
 
 CACHE_DIR = "/tmp/fibgp_cache"
-CANDLE_TTL = 15 * 60          # seconds — forming candle keeps moving
-LISTING_TTL = 24 * 3600       # universe listings refresh daily
+CANDLE_TTL = 15 * 60
+LISTING_TTL = 24 * 3600
 
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
               "AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/126.0.0.0 Safari/537.36")
 
-# C1 = primary provider, C2 = fallback provider
-C1_SPOT_HOSTS = ("https://data-api.binance.vision", "https://api.binance.com")
-C1_PERP_HOSTS = ("https://fapi.binance.com",)
-C2_HOSTS = ("https://api.bybit.com", "https://api.bytick.com")
-C3_SPOT_HOST = "https://api.mexc.com"
-C3_PERP_HOST = "https://contract.mexc.com"
-
-# bases that make a "coin" pair uninteresting for zone scanning
 EXCLUDE_BASES = {"USDC", "FDUSD", "TUSD", "DAI", "BUSD", "USDP", "EUR", "GBP",
                  "AEUR", "TRY", "BRL", "ARS", "COP", "UAH", "PLN", "RON",
                  "ZAR", "MXN", "CZK", "JPY", "XUSD", "USD1", "USDE", "PAXG"}
 LEVERAGED_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR", "3L", "3S", "2L", "2S",
                       "4L", "4S", "5L", "5S")
 
-# static emergency universe if all listing endpoints fail
 FALLBACK_MAJORS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
     "DOGEUSDT", "TRXUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "MATICUSDT",
@@ -69,11 +59,6 @@ FALLBACK_MAJORS = [
 ]
 
 
-# per-market listing membership: {"spot": {"c1": set, "c3": set}, "perp": {...}}
-_listed: dict[str, dict[str, set]] = {"spot": {"c1": set(), "c3": set()},
-                                      "perp": {"c1": set(), "c3": set()}}
-
-
 def _session() -> requests.Session:
     if not hasattr(_local, "session"):
         s = requests.Session()
@@ -83,7 +68,6 @@ def _session() -> requests.Session:
 
 
 def _get_json(url: str, params: dict, timeout: float = 20.0):
-    """GET returning (json, None) or (None, error_string)."""
     try:
         r = _session().get(url, params=params, timeout=timeout)
         if r.status_code != 200:
@@ -108,8 +92,8 @@ def _cache_fresh(path: str, ttl: int) -> bool:
         return False
 
 
-def _candles_read(market: str, symbol: str) -> pd.DataFrame | None:
-    p = _cache_path("ohlc", f"{market}_{symbol}.csv")
+def _candles_read(kind: str, symbol: str) -> pd.DataFrame | None:
+    p = _cache_path("ohlc", f"{kind}_{symbol}.csv")
     if not _cache_fresh(p, CANDLE_TTL):
         return None
     try:
@@ -119,15 +103,15 @@ def _candles_read(market: str, symbol: str) -> pd.DataFrame | None:
         return None
 
 
-def _candles_write(market: str, symbol: str, df: pd.DataFrame):
+def _candles_write(kind: str, symbol: str, df: pd.DataFrame):
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        df.to_csv(_cache_path("ohlc", f"{market}_{symbol}.csv"))
+        df.to_csv(_cache_path("ohlc", f"{kind}_{symbol}.csv"))
     except Exception:
         pass
 
 
-# ============================== CANDLES ========================================
+# ============================== PARSERS ========================================
 def _frame_from_rows(recs: list[dict], start: date) -> pd.DataFrame | None:
     if not recs:
         return None
@@ -137,82 +121,22 @@ def _frame_from_rows(recs: list[dict], start: date) -> pd.DataFrame | None:
     return df if len(df) else None
 
 
-def _c1_klines(symbol: str, market: str, start: date,
-               interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
-    """Primary provider klines. Spot and perps use different hosts/paths.
-    Response rows: [openTime, open, high, low, close, volume, ...] oldest-first,
-    the last row being the forming candle."""
-    if market == "spot":
-        hosts, path = C1_SPOT_HOSTS, "/api/v3/klines"
-    else:
-        hosts, path = C1_PERP_HOSTS, "/fapi/v1/klines"
-    err = None
-    for host in hosts:
-        data, err = _get_json(host + path,
-                              {"symbol": symbol, "interval": interval, "limit": 1000})
-        if data is None:
-            continue
-        if not isinstance(data, list):
-            err = f"unexpected payload: {str(data)[:80]}"
-            continue
-        recs = []
-        for row in data:
-            try:
-                d = datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc)
-                recs.append({"Date": pd.Timestamp(d.date()),
-                             "Open": float(row[1]), "High": float(row[2]),
-                             "Low": float(row[3]), "Close": float(row[4]),
-                             "Volume": float(row[5])})
-            except (ValueError, IndexError, TypeError):
-                continue
-        df = _frame_from_rows(recs, start)
-        return (df, None) if df is not None else (None, "no rows in window")
-    return None, f"C1 {err}"
-
-
-def _binance_rows_to_frame(data, start: date) -> pd.DataFrame | None:
-    """Shared parser for C1/C3 spot klines (identical row format)."""
-    if not isinstance(data, list):
-        return None
-    recs = []
-    for row in data:
-        try:
-            d = datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc)
-            recs.append({"Date": pd.Timestamp(d.date()),
-                         "Open": float(row[1]), "High": float(row[2]),
-                         "Low": float(row[3]), "Close": float(row[4]),
-                         "Volume": float(row[5])})
-        except (ValueError, IndexError, TypeError):
-            continue
-    return _frame_from_rows(recs, start)
-
-
-def _c3_spot_klines(symbol: str, start: date,
-                    interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
-    """C3 spot klines — v3 API, C1-compatible rows. Weekly is '1W' there."""
-    iv = "1W" if interval == "1w" else interval
-    data, err = _get_json(C3_SPOT_HOST + "/api/v3/klines",
-                          {"symbol": symbol, "interval": iv, "limit": 1000})
-    if data is None:
-        return None, f"C3 {err}"
-    df = _binance_rows_to_frame(data, start)
-    if df is None:
-        return None, f"C3 unexpected payload: {str(data)[:70]}"
-    return df, None
-
-
-def _c3_perp_klines(symbol: str, start: date,
-                    interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
-    """C3 futures klines — contract API: BTC_USDT symbols, columnar payload."""
+def _perp_klines(symbol: str, start: date,
+                 interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
+    """Futures candles — contract API: BTC_USDT symbols, columnar payload.
+    Explicit start/end so we always get the full window (default count is small)."""
     c_sym = symbol[:-4] + "_USDT" if symbol.endswith("USDT") else symbol
     iv = "Week1" if interval == "1w" else "Day1"
-    data, err = _get_json(f"{C3_PERP_HOST}/api/v1/contract/kline/{c_sym}",
-                          {"interval": iv})
+    t_start = int(datetime(start.year, start.month, start.day,
+                           tzinfo=timezone.utc).timestamp())
+    t_end = int(time.time())
+    data, err = _get_json(f"{PERP_HOST}/api/v1/contract/kline/{c_sym}",
+                          {"interval": iv, "start": t_start, "end": t_end})
     if data is None:
-        return None, f"C3 {err}"
+        return None, f"C-FUT {err}"
     d = data.get("data") if isinstance(data, dict) else None
     if not isinstance(d, dict) or not d.get("time"):
-        return None, f"C3 contract payload: {str(data)[:70]}"
+        return None, f"C-FUT payload: {str(data)[:70]}"
     try:
         recs = []
         for t, o, h, l, c, v in zip(d["time"], d["open"], d["high"],
@@ -224,47 +148,39 @@ def _c3_perp_klines(symbol: str, start: date,
                          "Low": float(l), "Close": float(c),
                          "Volume": float(v)})
     except (ValueError, TypeError, KeyError) as e:
-        return None, f"C3 contract parse: {str(e)[:60]}"
+        return None, f"C-FUT parse: {str(e)[:60]}"
     df = _frame_from_rows(recs, start)
-    return (df, None) if df is not None else (None, "C3 no rows in window")
+    return (df, None) if df is not None else (None, "C-FUT no rows in window")
 
 
-def _c2_klines(symbol: str, market: str, start: date,
-               interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
-    """Fallback provider klines. category spot|linear; rows newest-first:
-    [startTime(ms str), open, high, low, close, volume, turnover]."""
-    category = "spot" if market == "spot" else "linear"
-    err = None
-    for host in C2_HOSTS:
-        data, err = _get_json(host + "/v5/market/kline",
-                              {"category": category, "symbol": symbol,
-                               "interval": ("W" if interval == "1w" else "D"), "limit": 1000})
-        if data is None:
+def _spot_klines(symbol: str, start: date,
+                 interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
+    """Spot candles fallback — v3 API rows [openTime, o, h, l, c, vol, ...]."""
+    iv = "1W" if interval == "1w" else interval
+    data, err = _get_json(SPOT_HOST + "/api/v3/klines",
+                          {"symbol": symbol, "interval": iv, "limit": 1000})
+    if data is None:
+        return None, f"C-SPOT {err}"
+    if not isinstance(data, list):
+        return None, f"C-SPOT payload: {str(data)[:70]}"
+    recs = []
+    for row in data:
+        try:
+            d = datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc)
+            recs.append({"Date": pd.Timestamp(d.date()),
+                         "Open": float(row[1]), "High": float(row[2]),
+                         "Low": float(row[3]), "Close": float(row[4]),
+                         "Volume": float(row[5])})
+        except (ValueError, IndexError, TypeError):
             continue
-        rows = (data.get("result") or {}).get("list") or []
-        if not rows:
-            err = f"retCode {data.get('retCode')}: {str(data.get('retMsg'))[:60]}"
-            continue
-        recs = []
-        for row in rows:
-            try:
-                d = datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc)
-                recs.append({"Date": pd.Timestamp(d.date()),
-                             "Open": float(row[1]), "High": float(row[2]),
-                             "Low": float(row[3]), "Close": float(row[4]),
-                             "Volume": float(row[5])})
-            except (ValueError, IndexError, TypeError):
-                continue
-        df = _frame_from_rows(recs, start)
-        return (df, None) if df is not None else (None, "no rows in window")
-    return None, f"C2 {err}"
+    df = _frame_from_rows(recs, start)
+    return (df, None) if df is not None else (None, "C-SPOT no rows in window")
 
 
-def fetch_daily_crypto(symbol: str, start: date, market: str = "spot",
+# ============================== PUBLIC: CANDLES ================================
+def fetch_daily_crypto(symbol: str, start: date, market: str = "perp",
                        interval: str = "1d") -> pd.DataFrame | None:
-    """15-min disk cache → primary → fallback. interval '1d' or '1w' —
-    weekly candles are native exchange candles (Monday-start, UTC), incl.
-    the forming candle."""
+    """15-min disk cache → perpetual futures → spot fallback."""
     ckey = f"{market}_{interval}"
     cached = _candles_read(ckey, symbol)
     if cached is not None:
@@ -272,41 +188,22 @@ def fetch_daily_crypto(symbol: str, start: date, market: str = "spot",
         if len(cut):
             LAST_ERRORS.pop(symbol, None)
             return cut
-
-    def try_c1():
-        return _c1_klines(symbol, market, start, interval)
-
-    def try_c3():
-        if market == "spot":
-            return _c3_spot_klines(symbol, start, interval)
-        return _c3_perp_klines(symbol, start, interval)
-
-    def try_c2():
-        return _c2_klines(symbol, market, start, interval)
-
-    # route to the exchange that lists the symbol first; fall through the rest
-    on_c1 = symbol in _listed[market]["c1"]
-    on_c3 = symbol in _listed[market]["c3"]
-    if on_c3 and not on_c1:
-        order = (try_c3, try_c1, try_c2)
-    else:
-        order = (try_c1, try_c3, try_c2)
-
-    errs = []
-    for attempt in order:
-        df, err = attempt()
-        if df is not None:
-            _candles_write(ckey, symbol, df)
-            LAST_ERRORS.pop(symbol, None)
-            return df
-        errs.append(err or "?")
-    LAST_ERRORS[symbol] = " | ".join(errs)
+    df, e1 = _perp_klines(symbol, start, interval)
+    if df is not None:
+        _candles_write(ckey, symbol, df)
+        LAST_ERRORS.pop(symbol, None)
+        return df
+    df, e2 = _spot_klines(symbol, start, interval)
+    if df is not None:
+        _candles_write(ckey, symbol, df)
+        LAST_ERRORS.pop(symbol, None)
+        return df
+    LAST_ERRORS[symbol] = f"{e1} | {e2}"
     return None
 
 
-# ============================== UNIVERSE LISTINGS ==============================
+# ============================== PUBLIC: UNIVERSE ===============================
 def _clean_bases(pairs: list[tuple[str, str]]) -> list[str]:
-    """pairs = [(symbol, baseAsset)] → filtered sorted symbol list."""
     out = []
     for sym, base in pairs:
         if base in EXCLUDE_BASES:
@@ -317,86 +214,45 @@ def _clean_bases(pairs: list[tuple[str, str]]) -> list[str]:
     return sorted(set(out))
 
 
-def list_symbols(market: str = "spot") -> tuple[list[str], str]:
-    """All active USDT pairs for the market ('spot' | 'perp').
-    Returns (symbols, source_note). Daily disk cache; static fallback list
-    if every listing endpoint fails."""
+def list_symbols(market: str = "perp") -> tuple[list[str], str]:
+    """All active USDT perpetual contracts; spot listing as fallback;
+    static majors if the exchange is unreachable. Daily disk cache."""
     cache_p = _cache_path("universe", f"{market}.json")
     if _cache_fresh(cache_p, LISTING_TTL):
         try:
-            payload = json.load(open(cache_p))
-            if isinstance(payload, dict) and len(payload.get("all", [])) > 20:
-                _listed[market]["c1"] = set(payload.get("c1", []))
-                _listed[market]["c3"] = set(payload.get("c3", []))
-                return payload["all"], "cached"
+            syms = json.load(open(cache_p))
+            if isinstance(syms, list) and len(syms) > 20:
+                return syms, "cached"
         except Exception:
             pass
 
-    c1_pairs: list[tuple[str, str]] = []
-    c3_pairs: list[tuple[str, str]] = []
-    # --- provider C1 ---
-    if market == "spot":
-        for host in C1_SPOT_HOSTS:
-            data, _ = _get_json(host + "/api/v3/exchangeInfo", {})
-            if data and "symbols" in data:
-                c1_pairs = [(s["symbol"], s.get("baseAsset", ""))
-                            for s in data["symbols"]
-                            if s.get("quoteAsset") == "USDT"
-                            and s.get("status") == "TRADING"]
-                break
-    else:
-        for host in C1_PERP_HOSTS:
-            data, _ = _get_json(host + "/fapi/v1/exchangeInfo", {})
-            if data and "symbols" in data:
-                c1_pairs = [(s["symbol"], s.get("baseAsset", ""))
-                            for s in data["symbols"]
-                            if s.get("quoteAsset") == "USDT"
-                            and s.get("status") == "TRADING"
-                            and s.get("contractType") == "PERPETUAL"]
-                break
-    # --- provider C3 (breadth) ---
-    if market == "spot":
-        data, _ = _get_json(C3_SPOT_HOST + "/api/v3/exchangeInfo", {})
-        if data and "symbols" in data:
-            c3_pairs = [(s["symbol"], s.get("baseAsset", ""))
-                        for s in data["symbols"]
-                        if s.get("quoteAsset") == "USDT"
-                        and (s.get("status") in ("TRADING", "1", "ENABLED")
-                             or s.get("isSpotTradingAllowed"))]
-    else:
-        data, _ = _get_json(C3_PERP_HOST + "/api/v1/contract/detail", {})
-        lst = (data or {}).get("data") if isinstance(data, dict) else None
-        if isinstance(lst, list):
-            for s in lst:
-                raw = str(s.get("symbol", ""))
-                if s.get("quoteCoin") == "USDT" and raw.endswith("_USDT") \
-                        and s.get("state", 0) in (0, "0"):
-                    c3_pairs.append((raw.replace("_", ""), raw.split("_")[0]))
-    # --- provider C2 (only if both above came up empty) ---
-    if not c1_pairs and not c3_pairs:
-        category = "spot" if market == "spot" else "linear"
-        for host in C2_HOSTS:
-            data, _ = _get_json(host + "/v5/market/instruments-info",
-                                {"category": category, "limit": 1000})
-            lst = ((data or {}).get("result") or {}).get("list") or []
-            if lst:
-                c1_pairs = [(s["symbol"], s.get("baseCoin", ""))
-                            for s in lst
-                            if s.get("quoteCoin") == "USDT"
-                            and s.get("status") == "Trading"]
-                break
+    pairs: list[tuple[str, str]] = []
+    src = "live"
+    data, _ = _get_json(PERP_HOST + "/api/v1/contract/detail", {})
+    lst = (data or {}).get("data") if isinstance(data, dict) else None
+    if isinstance(lst, list):
+        for s in lst:
+            raw = str(s.get("symbol", ""))
+            if s.get("quoteCoin") == "USDT" and raw.endswith("_USDT") \
+                    and s.get("state", 0) in (0, "0"):
+                pairs.append((raw.replace("_", ""), raw.split("_")[0]))
 
-    if c1_pairs or c3_pairs:
-        _listed[market]["c1"] = set(_clean_bases(c1_pairs))
-        _listed[market]["c3"] = set(_clean_bases(c3_pairs))
-        syms = sorted(_listed[market]["c1"] | _listed[market]["c3"])
+    if not pairs:                       # spot listing fallback (same exchange)
+        data, _ = _get_json(SPOT_HOST + "/api/v3/exchangeInfo", {})
+        if data and "symbols" in data:
+            pairs = [(s["symbol"], s.get("baseAsset", ""))
+                     for s in data["symbols"]
+                     if s.get("quoteAsset") == "USDT"
+                     and (s.get("status") in ("TRADING", "1", "ENABLED")
+                          or s.get("isSpotTradingAllowed"))]
+            src = "live (spot listing)"
+
+    if pairs:
+        syms = _clean_bases(pairs)
         try:
             os.makedirs(CACHE_DIR, exist_ok=True)
-            json.dump({"all": syms,
-                       "c1": sorted(_listed[market]["c1"]),
-                       "c3": sorted(_listed[market]["c3"])},
-                      open(cache_p, "w"))
+            json.dump(syms, open(cache_p, "w"))
         except Exception:
             pass
-        return syms, "live"
+        return syms, src
     return list(FALLBACK_MAJORS), "fallback list (listing endpoints unreachable)"
