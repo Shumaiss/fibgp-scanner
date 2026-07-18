@@ -62,7 +62,7 @@ h1,h2,h3 {{ font-family:'Rajdhani',sans-serif; }}
 .hd-title {{ font-family:'Rajdhani',sans-serif; font-size:2.1rem; font-weight:700;
   letter-spacing:.12em; line-height:1.0; }}
 .hd-title .m {{ color:#FFFFFF; }}
-.hd-rule {{ width:56px; height:2px; background:#FFFFFF; margin:8px 0 2px 0; }}
+.hd-rule {{ width:56px; height:2px; background:{GOLD}; margin:8px 0 2px 0; }}
 .hd-sub {{ color:{MUTE}; font-size:.72rem; letter-spacing:.14em; }}
 
 .statrow {{ display:grid; grid-template-columns:repeat(5,1fr); gap:12px; }}
@@ -73,7 +73,8 @@ h1,h2,h3 {{ font-family:'Rajdhani',sans-serif; }}
 .stat .v {{ font-family:'Rajdhani',sans-serif; font-size:2.15rem; font-weight:700;
   line-height:1.05; letter-spacing:.02em; }}
 .stat .p {{ font-size:.66rem; color:{MUTE}; }}
-.stat.hero {{ border-left:2px solid #FFFFFF; }}
+.stat.hero {{ border-left:2px solid {GOLD};
+  box-shadow:0 8px 24px rgba(0,0,0,.35), inset 0 0 40px rgba(232,180,74,.06); }}
 
 .panel {{ background:linear-gradient({PANEL2}, {PANEL});
   border:1px solid rgba(255,255,255,.06); border-top-color:rgba(255,255,255,.10);
@@ -92,32 +93,33 @@ table.scan tr:hover td {{ background:rgba(255,255,255,.028); }}
 table.scan tr:last-child td {{ border-bottom:none; }}
 .tick {{ color:#FFFFFF; font-weight:800; letter-spacing:.02em;
   text-decoration:none; }}
-a.tick:hover {{ text-decoration:underline; text-underline-offset:3px; }}
+a.tick:hover {{ color:{GOLD}; text-decoration:underline; text-underline-offset:3px; }}
 a.sym {{ text-decoration:none; }}
 a.sym:hover {{ text-decoration:underline; text-underline-offset:4px; }}
 .goto {{ opacity:0; font-size:.7em; margin-left:3px; transition:opacity .12s; }}
 a:hover .goto {{ opacity:.85; }}
 .badge {{ display:inline-block; padding:2px 9px; border-radius:5px; font-size:.6rem;
   letter-spacing:.1em; font-weight:700; }}
-.b-insup  {{ background:#FFFFFF; color:#0A0A0B; border:1px solid #FFFFFF; font-weight:800; }}
-.b-nearsup{{ background:transparent; color:#FFFFFF; border:1px solid rgba(255,255,255,.75); }}
-.b-inres  {{ background:#B9B9C2; color:#0A0A0B; border:1px solid #B9B9C2; font-weight:800; }}
-.b-nearres{{ background:transparent; color:#C9C9D1; border:1px solid rgba(201,201,209,.6); }}
+.b-insup  {{ background:{GOLD}; color:#0A0A0B; border:1px solid {GOLD}; font-weight:800; }}
+.b-nearsup{{ background:transparent; color:{GOLD}; border:1px solid rgba(232,180,74,.6); }}
+.b-inres  {{ background:{COOL}; color:#0A0A0B; border:1px solid {COOL}; font-weight:800; }}
+.b-nearres{{ background:transparent; color:{COOL}; border:1px solid rgba(127,168,201,.55); }}
 .b-watch  {{ background:transparent; color:{MUTE}; border:1px solid {LINE}; }}
 .b-nozone {{ background:transparent; color:{DIM}; border:1px dashed {LINE}; }}
-.stars {{ color:#FFFFFF; letter-spacing:.06em; }}
+.stars {{ color:{GOLD}; letter-spacing:.06em; }}
 .pill {{ display:inline-block; padding:1px 7px; border-radius:9px; font-size:.62rem;
   margin-left:5px; vertical-align:1px; background:{PANEL2}; color:#C9C9D1;
   border:1px solid {LINE}; }}
 .mut {{ color:#8B8B96; }}
-.dgreen {{ color:#FFFFFF; }} .dred {{ color:#9A9AA3; }} .damber {{ color:#9A9AA3; }}
+.dgreen {{ color:{GOLD}; }} .dred {{ color:{COOL}; }} .damber {{ color:#9A9AA3; }}
 
 .legend {{ font-size:.7rem; line-height:2.0; }}
 .dot {{ display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:8px; }}
 
-.toppick {{ border:1px solid rgba(255,255,255,.16) !important; }}
-.toppick .sym {{ font-family:'Rajdhani',sans-serif; font-size:2.0rem; font-weight:700;
-  color:#FFFFFF; letter-spacing:.03em; }}
+.toppick {{ border:1px solid rgba(232,180,74,.28) !important;
+  box-shadow:0 10px 30px rgba(0,0,0,.35), inset 0 0 50px rgba(232,180,74,.05); }}
+.toppick .sym, .toppick a.sym {{ font-family:'Rajdhani',sans-serif; font-size:2.0rem;
+  font-weight:700; color:{GOLD}; letter-spacing:.03em; }}
 .toppick .px {{ font-family:'Rajdhani',sans-serif; font-size:1.7rem; font-weight:700; }}
 
 .dist-track {{ height:3px; background:#1D1D22; border-radius:2px; margin-top:6px; }}
@@ -125,7 +127,9 @@ a:hover .goto {{ opacity:.85; }}
 
 .stButton>button {{ border:1px solid rgba(255,255,255,.18); background:transparent;
   color:{TXT}; border-radius:9px; transition:all .12s; }}
-.stButton>button:hover {{ background:#FFFFFF; color:#0A0A0B; border-color:#FFFFFF; }}
+.stButton>button:hover {{ background:{GOLD}; color:#0A0A0B; border-color:{GOLD}; }}
+button[kind="primary"] {{ background:{GOLD} !important; color:#0A0A0B !important;
+  border-color:{GOLD} !important; font-weight:700; }}
 div[data-testid="stTextInput"] input {{ background:{PANEL2};
   border:1px solid rgba(255,255,255,.10); color:{TXT}; border-radius:9px; }}
 </style>
@@ -207,7 +211,7 @@ def sparkline(closes: np.ndarray, w: int = 92, h: int = 26) -> str:
     rng = (hi - lo) or 1.0
     pts = " ".join(f"{i * w / (len(v) - 1):.1f},{h - 2 - (x - lo) / rng * (h - 4):.1f}"
                    for i, x in enumerate(v))
-    col = "#EDEDF1" if v[-1] >= v[0] else "#84848E"
+    col = GOLD if v[-1] >= v[0] else COOL
     return (f"<svg width='{w}' height='{h}' viewBox='0 0 {w} {h}'>"
             f"<polyline points='{pts}' fill='none' stroke='{col}' "
             f"stroke-width='1.5' stroke-linejoin='round'/></svg>")
@@ -217,7 +221,7 @@ def donut(counts: dict[str, int]) -> str:
     total = sum(counts.values()) or 1
     R, CX, CY, SW = 40, 55, 55, 15
     circ = 2 * math.pi * R
-    colors = {"In zone": "#FFFFFF", "Near zone": "#9A9AA3",
+    colors = {"In zone": GOLD, "Near zone": COOL,
               "Watching": "#55555E", "No zone / n.a.": "#2A2A2F"}
     segs, off = "", 0.0
     for k, v in counts.items():
@@ -273,7 +277,7 @@ def fmt_px(v: float) -> str:
 
 # ============================== SIDEBAR ========================================
 with st.sidebar:
-    st.markdown(f"<div class='hd-title'>◆ WHALE <span class='m'>SCANNER</span></div>"
+    st.markdown(f"<div class='hd-title'><span style='color:{GOLD}'>◆</span> WHALE <span class='m'>SCANNER</span></div>"
                 f"<div class='hd-sub'>KEY LEVELS · DAILY / WEEKLY</div>",
                 unsafe_allow_html=True)
     st.write("")
@@ -372,7 +376,7 @@ def run_full_scan(syms, start, engine, thr, market, tf):
     to_fetch = [s for s in syms if (s, key) not in st.session_state.ohlc_cache]
     done = 0
     if to_fetch:
-        workers = 2 if market == "psx" else 8
+        workers = 2 if market == "psx" else 3
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {ex.submit(_fetch, s): s for s in to_fetch}
             for fut in as_completed(futs):
@@ -464,8 +468,8 @@ def pct(n): return f"({100 * n / tot:.1f}%)" if tot else ""
 
 st.markdown(f"""<div class='statrow'>
  <div class='stat'><div class='k'>UNIVERSE</div><div class='v'>{tot}</div><div class='p'>tickers</div></div>
- <div class='stat hero'><div class='k' style='color:#FFFFFF'>IN ZONE</div><div class='v' style='color:{MINT}'>{n_in}</div><div class='p'>{pct(n_in)}</div></div>
- <div class='stat'><div class='k' style='color:{RED}'>NEAR ZONE</div><div class='v' style='color:{RED}'>{n_near}</div><div class='p'>≤ {near_pct:g}% {pct(n_near)}</div></div>
+ <div class='stat hero'><div class='k' style='color:{GOLD}'>IN ZONE</div><div class='v' style='color:{GOLD}'>{n_in}</div><div class='p'>{pct(n_in)}</div></div>
+ <div class='stat'><div class='k' style='color:{COOL}'>NEAR ZONE</div><div class='v' style='color:{COOL}'>{n_near}</div><div class='p'>≤ {near_pct:g}% {pct(n_near)}</div></div>
  <div class='stat'><div class='k' style='color:{AMBER}'>WATCHING</div><div class='v' style='color:{AMBER}'>{n_watch}</div><div class='p'>{pct(n_watch)}</div></div>
  <div class='stat'><div class='k'>NO ZONE / N.A.</div><div class='v'>{n_none}</div><div class='p'>{pct(n_none)}</div></div>
 </div>""", unsafe_allow_html=True)
@@ -578,8 +582,8 @@ with right:
     # ---- market momentum ----
     buys = sum(1 for r in rows if r.stoch_sig == "BUY")
     ratio = buys / len(rows) if rows else 0.5
-    mood = ("Bullish ↑", "#FFFFFF") if ratio > 0.55 else \
-        (("Bearish ↓", "#FFFFFF") if ratio < 0.45 else ("Neutral →", "#FFFFFF"))
+    mood = ("Bullish ↑", GOLD) if ratio > 0.55 else \
+        (("Bearish ↓", COOL) if ratio < 0.45 else ("Neutral →", "#C9C9D1"))
     st.markdown(f"""<div class='panel'>
       <div class='panel-hd mut'>MARKET MOMENTUM</div>
       <div style='font-family:Rajdhani;font-size:1.4rem;font-weight:700;color:{mood[1]}'>{mood[0]}</div>
@@ -594,7 +598,7 @@ with right:
         f"<div><span class='dot' style='background:{c}'></span>{k} "
         f"<span class='mut'>{v} {pct(v)}</span></div>"
         for (k, v), c in zip(counts.items(),
-                             ("#FFFFFF", "#9A9AA3", "#55555E", "#2A2A2F")))
+                             (GOLD, COOL, "#55555E", "#2A2A2F")))
     st.markdown(f"""<div class='panel'>
       <div class='panel-hd'>SUMMARY</div>
       <div style='display:flex;gap:14px;align-items:center'>

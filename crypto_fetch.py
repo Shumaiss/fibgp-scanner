@@ -1,11 +1,16 @@
 """
-crypto_fetch.py — Crypto OHLCV fetcher, single-exchange edition. (v3.0)
+crypto_fetch.py — Crypto OHLCV fetcher, single-exchange edition. (v3.1)
 
 One exchange only. PERPETUAL futures are the primary source (contract API);
 the same exchange's spot API is the automatic fallback so a missing or
 unreachable contract never blanks the scanner. Universe = all active USDT
 perpetual contracts (spot listing as fallback), leveraged tokens and
 stable-vs-stable pairs excluded.
+
+v3.1: request pacing + adaptive throttle handling. The contract API rate
+limits aggressively (code 510), so requests are paced globally, retried with
+exponential backoff on 510, and a breaker cools the source when throttling
+persists — partial scans then resume from cache instead of failing.
 
 Candles include the current forming bar (matches chart platforms); disk
 cache TTL 15 min (crypto trades around the clock), listings cached daily.
@@ -67,17 +72,74 @@ def _session() -> requests.Session:
     return _local.session
 
 
-def _get_json(url: str, params: dict, timeout: float = 20.0):
-    try:
-        r = _session().get(url, params=params, timeout=timeout)
-        if r.status_code != 200:
-            return None, f"HTTP {r.status_code}"
-        return r.json(), None
-    except requests.RequestException as e:
-        detail = str(e.args[0]) if e.args else str(e)
-        return None, f"{type(e).__name__}: {detail[:90]}"
-    except ValueError:
-        return None, "bad JSON"
+# ---- global pacing: one request at a time, minimum gap between them ----
+MIN_GAP = 0.14                 # seconds between consecutive requests
+_pace_lock = threading.Lock()
+_last_call = [0.0]
+
+# ---- adaptive breaker: cools the source when throttling persists ----
+_BREAK_AFTER = 6
+_COOLDOWN = 90.0
+_thr = {"fails": 0, "down_until": 0.0}
+_thr_lock = threading.Lock()
+
+
+def _pace():
+    with _pace_lock:
+        wait = MIN_GAP - (time.time() - _last_call[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_call[0] = time.time()
+
+
+def _breaker_open() -> bool:
+    with _thr_lock:
+        return time.time() < _thr["down_until"]
+
+
+def _breaker_report(ok: bool):
+    with _thr_lock:
+        if ok:
+            _thr["fails"] = 0
+        else:
+            _thr["fails"] += 1
+            if _thr["fails"] >= _BREAK_AFTER:
+                _thr["down_until"] = time.time() + _COOLDOWN
+                _thr["fails"] = 0
+
+
+def _is_throttled(payload) -> bool:
+    """Contract API returns HTTP 200 with success:false, code 510 when
+    requests are too frequent."""
+    return (isinstance(payload, dict) and payload.get("success") is False
+            and payload.get("code") in (510, "510"))
+
+
+def _get_json(url: str, params: dict, timeout: float = 20.0, retries: int = 3):
+    """Paced GET with exponential backoff on throttle responses."""
+    err = None
+    for attempt in range(retries + 1):
+        if attempt:
+            time.sleep(0.8 * (2 ** (attempt - 1)))   # 0.8s, 1.6s, 3.2s
+        _pace()
+        try:
+            r = _session().get(url, params=params, timeout=timeout)
+            if r.status_code == 429:
+                err = "HTTP 429 (rate limited)"
+                continue
+            if r.status_code != 200:
+                return None, f"HTTP {r.status_code}"
+            data = r.json()
+            if _is_throttled(data):
+                err = "throttled (510)"
+                continue
+            return data, None
+        except requests.RequestException as e:
+            detail = str(e.args[0]) if e.args else str(e)
+            err = f"{type(e).__name__}: {detail[:90]}"
+        except ValueError:
+            return None, "bad JSON"
+    return None, err or "unknown"
 
 
 # ============================== DISK CACHE (TTL) ===============================
@@ -188,17 +250,23 @@ def fetch_daily_crypto(symbol: str, start: date, market: str = "perp",
         if len(cut):
             LAST_ERRORS.pop(symbol, None)
             return cut
+    if _breaker_open():
+        LAST_ERRORS[symbol] = "source cooling down (rate limited)"
+        return None
     df, e1 = _perp_klines(symbol, start, interval)
     if df is not None:
         _candles_write(ckey, symbol, df)
         LAST_ERRORS.pop(symbol, None)
+        _breaker_report(True)
         return df
     df, e2 = _spot_klines(symbol, start, interval)
     if df is not None:
         _candles_write(ckey, symbol, df)
         LAST_ERRORS.pop(symbol, None)
+        _breaker_report(True)
         return df
     LAST_ERRORS[symbol] = f"{e1} | {e2}"
+    _breaker_report(False)
     return None
 
 
