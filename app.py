@@ -32,7 +32,10 @@ BG     = "#0A0A0B"
 PANEL  = "#101012"
 PANEL2 = "#17171A"
 LINE   = "#242429"
-MINT   = "#FFFFFF"          # primary accent (monochrome)
+GOLD   = "#E8B44A"          # single accent — support / in-zone / stars
+GOLDD  = "#3A2E14"          # accent shadow
+COOL   = "#7FA8C9"          # counterpart — resistance side
+MINT   = "#FFFFFF"          # primary text accent
 MINTD  = "#2E2E33"
 RED    = "#9A9AA3"          # secondary emphasis
 AMBER  = "#6E6E78"          # tertiary emphasis
@@ -49,6 +52,7 @@ st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Rajdhani:wght@500;600;700&display=swap');
 .stApp {{ background:
+  radial-gradient(1100px 460px at 50% -12%, rgba(232,180,74,.055) 0%, transparent 62%),
   radial-gradient(1200px 500px at 50% -10%, #101014 0%, {BG} 55%); }}
 html, body, [class*="css"] {{ font-family:'JetBrains Mono',monospace; color:{TXT};
   font-variant-numeric: tabular-nums; }}
