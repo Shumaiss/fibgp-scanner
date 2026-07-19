@@ -315,42 +315,56 @@ def _clean_bases(pairs: list[tuple[str, str]]) -> list[str]:
 
 
 def probe_contract_fields(samples: tuple[str, ...] =
-                          ("MU", "SNDK", "SKHY", "NBIS", "LITE", "BE", "ASTS",
-                           "SPCX", "BTC", "ETH", "XAU", "XAG", "OIL", "EUR")
-                          ) -> dict:
-    """DIAGNOSTIC: fetch the raw contract listing and report (a) the full field
-    set MEXC returns per contract, (b) the distinct values of every low-
-    cardinality field (these are the category labels we need), and (c) the raw
-    records for a few known symbols. Used once to map Stock / Precious Metals /
-    Pre-IPO / Forex correctly instead of guessing from names."""
+                          ("MU", "SNDK", "SKHY", "BE", "LITE", "SPCX",
+                           "BTC", "ETH", "XAU", "OIL", "EUR")) -> dict:
+    """DIAGNOSTIC (compact): find which field carries MEXC's category labels
+    and show what each sample symbol has for it. Output is small enough to
+    read in one screenshot."""
     data, err = _get_json(PERP_HOST + "/api/v1/contract/detail", {})
     lst = (data or {}).get("data") if isinstance(data, dict) else None
     if not isinstance(lst, list) or not lst:
         return {"error": err or "no contract list returned"}
-
     usdt = [c for c in lst if str(c.get("symbol", "")).endswith("_USDT")]
-    fields = sorted({k for c in usdt[:400] for k in c.keys()})
 
-    # candidate category fields: few distinct values across many contracts
-    cat_fields = {}
-    for f in fields:
+    def norm(v):
+        """Flatten list-valued fields (conceptPlate is a list) to a tuple."""
+        if isinstance(v, list):
+            return tuple(str(x) for x in v[:3])
+        return v
+
+    # score every field by how well it separates known stocks from known crypto
+    stock_bases = {"MU", "SNDK", "SKHY", "BE", "LITE", "NBIS", "ASTS"}
+    crypto_bases = {"BTC", "ETH", "SOL", "XRP", "DOGE"}
+    report = {}
+    for f in sorted({k for c in usdt[:300] for k in c.keys()}):
         vals = {}
         for c in usdt:
-            v = c.get(f)
-            if isinstance(v, (str, int, bool)) and not isinstance(v, float):
+            v = norm(c.get(f))
+            if isinstance(v, (str, int, bool, tuple)) and not isinstance(v, float):
                 vals[v] = vals.get(v, 0) + 1
-        if 1 < len(vals) <= 30:
-            cat_fields[f] = dict(sorted(vals.items(), key=lambda x: -x[1])[:30])
+        if not (1 < len(vals) <= 40):
+            continue
+        s_vals = {norm(c.get(f)) for c in usdt
+                  if str(c.get("baseCoin", "")).upper() in stock_bases}
+        c_vals = {norm(c.get(f)) for c in usdt
+                  if str(c.get("baseCoin", "")).upper() in crypto_bases}
+        if s_vals and c_vals and not (s_vals & c_vals):      # clean separator
+            report[f] = {"stocks_have": [str(x)[:40] for x in list(s_vals)[:5]],
+                         "crypto_have": [str(x)[:40] for x in list(c_vals)[:5]],
+                         "all_values": [str(k)[:34] for k in
+                                        sorted(vals, key=lambda x: -vals[x])[:20]]}
 
-    wanted = {}
+    samples_out = {}
     for base in samples:
         rec = next((c for c in usdt
-                    if str(c.get("symbol", "")).upper() == f"{base}_USDT"), None)
+                    if str(c.get("baseCoin", "")).upper() == base), None)
         if rec:
-            wanted[base] = {k: rec.get(k) for k in fields
-                            if isinstance(rec.get(k), (str, int, bool, type(None)))}
-    return {"total_usdt_contracts": len(usdt), "fields": fields,
-            "category_fields": cat_fields, "samples": wanted}
+            samples_out[base] = {f: str(norm(rec.get(f)))[:40] for f in report}
+    return {"contracts": len(usdt),
+            "separator_fields": report or "none found — see all_fields",
+            "samples": samples_out,
+            "all_fields": sorted({k for c in usdt[:300] for k in c.keys()})
+                          if not report else "(hidden — separators found)"}
 
 
 def list_symbols(market: str = "perp") -> tuple[list[str], str]:
