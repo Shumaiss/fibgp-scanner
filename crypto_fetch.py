@@ -314,57 +314,49 @@ def _clean_bases(pairs: list[tuple[str, str]]) -> list[str]:
     return sorted(set(out))
 
 
-def probe_contract_fields(samples: tuple[str, ...] =
-                          ("MU", "SNDK", "SKHY", "BE", "LITE", "SPCX",
-                           "BTC", "ETH", "XAU", "OIL", "EUR")) -> dict:
-    """DIAGNOSTIC (compact): find which field carries MEXC's category labels
-    and show what each sample symbol has for it. Output is small enough to
-    read in one screenshot."""
+def probe_contract_fields(samples: tuple[str, ...] = ()) -> dict:
+    """DIAGNOSTIC v3: read the classification fields directly.
+    Reports the value distribution of type / typeLabel / conceptPlate /
+    preMarket, plus real example symbols for each distinct value, so the
+    category mapping can be built from MEXC's own labels."""
     data, err = _get_json(PERP_HOST + "/api/v1/contract/detail", {})
     lst = (data or {}).get("data") if isinstance(data, dict) else None
     if not isinstance(lst, list) or not lst:
         return {"error": err or "no contract list returned"}
     usdt = [c for c in lst if str(c.get("symbol", "")).endswith("_USDT")]
 
-    def norm(v):
-        """Flatten list-valued fields (conceptPlate is a list) to a tuple."""
+    def flat(v):
         if isinstance(v, list):
-            return tuple(str(x) for x in v[:3])
+            return ", ".join(str(x) for x in v[:3]) or "(empty list)"
         return v
 
-    # score every field by how well it separates known stocks from known crypto
-    stock_bases = {"MU", "SNDK", "SKHY", "BE", "LITE", "NBIS", "ASTS"}
-    crypto_bases = {"BTC", "ETH", "SOL", "XRP", "DOGE"}
-    report = {}
-    for f in sorted({k for c in usdt[:300] for k in c.keys()}):
-        vals = {}
+    out = {"contracts": len(usdt)}
+    for f in ("type", "typeLabel", "preMarket", "conceptPlate", "conceptPlateId"):
+        buckets: dict = {}
         for c in usdt:
-            v = norm(c.get(f))
-            if isinstance(v, (str, int, bool, tuple)) and not isinstance(v, float):
-                vals[v] = vals.get(v, 0) + 1
-        if not (1 < len(vals) <= 40):
+            key = str(flat(c.get(f)))[:44]
+            b = buckets.setdefault(key, {"n": 0, "eg": []})
+            b["n"] += 1
+            if len(b["eg"]) < 4:
+                b["eg"].append(str(c.get("symbol", "")).replace("_USDT", ""))
+        if len(buckets) <= 1:
+            out[f] = f"single value: {list(buckets)[:1]}"
             continue
-        s_vals = {norm(c.get(f)) for c in usdt
-                  if str(c.get("baseCoin", "")).upper() in stock_bases}
-        c_vals = {norm(c.get(f)) for c in usdt
-                  if str(c.get("baseCoin", "")).upper() in crypto_bases}
-        if s_vals and c_vals and not (s_vals & c_vals):      # clean separator
-            report[f] = {"stocks_have": [str(x)[:40] for x in list(s_vals)[:5]],
-                         "crypto_have": [str(x)[:40] for x in list(c_vals)[:5]],
-                         "all_values": [str(k)[:34] for k in
-                                        sorted(vals, key=lambda x: -vals[x])[:20]]}
+        top = sorted(buckets.items(), key=lambda x: -x[1]["n"])[:22]
+        out[f] = {k: f"{v['n']}x  eg: {', '.join(v['eg'])}" for k, v in top}
 
-    samples_out = {}
-    for base in samples:
-        rec = next((c for c in usdt
-                    if str(c.get("baseCoin", "")).upper() == base), None)
+    # what a few known-real symbols actually look like
+    known = ("BTC_USDT", "ETH_USDT", "MU_USDT", "SNDK_USDT", "SKHY_USDT",
+             "BE_USDT", "XAU_USDT", "OIL_USDT", "EUR_USDT", "SPCX_USDT")
+    recs = {}
+    for sym in known:
+        rec = next((c for c in usdt if str(c.get("symbol", "")) == sym), None)
         if rec:
-            samples_out[base] = {f: str(norm(rec.get(f)))[:40] for f in report}
-    return {"contracts": len(usdt),
-            "separator_fields": report or "none found — see all_fields",
-            "samples": samples_out,
-            "all_fields": sorted({k for c in usdt[:300] for k in c.keys()})
-                          if not report else "(hidden — separators found)"}
+            recs[sym] = {f: str(flat(rec.get(f)))[:40] for f in
+                         ("type", "typeLabel", "preMarket", "conceptPlate",
+                          "displayNameEn", "baseCoin")}
+    out["known_symbols"] = recs or "none of the probe symbols matched"
+    return out
 
 
 def list_symbols(market: str = "perp") -> tuple[list[str], str]:
