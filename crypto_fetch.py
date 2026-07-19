@@ -1,11 +1,16 @@
 """
-crypto_fetch.py — Crypto OHLCV fetcher, single-exchange edition. (v3.1)
+crypto_fetch.py — Crypto OHLCV fetcher, single-exchange edition. (v3.2)
 
 One exchange only. PERPETUAL futures are the primary source (contract API);
 the same exchange's spot API is the automatic fallback so a missing or
 unreachable contract never blanks the scanner. Universe = all active USDT
 perpetual contracts (spot listing as fallback), leveraged tokens and
 stable-vs-stable pairs excluded.
+
+v3.2: tokenized-equity / commodity contracts excluded from the universe
+(MEXC lists synthetic AAPL, TSLA, XAU etc. as USDT contracts — they are not
+crypto and usually lack usable kline history), and error text is preserved
+end-to-end so diagnostics never collapse to "unknown".
 
 v3.1: request pacing + adaptive throttle handling. The contract API rate
 limits aggressively (code 510), so requests are paced globally, retried with
@@ -49,6 +54,29 @@ EXCLUDE_BASES = {"USDC", "FDUSD", "TUSD", "DAI", "BUSD", "USDP", "EUR", "GBP",
                  "ZAR", "MXN", "CZK", "JPY", "XUSD", "USD1", "USDE", "PAXG"}
 LEVERAGED_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR", "3L", "3S", "2L", "2S",
                       "4L", "4S", "5L", "5S")
+
+# Tokenized equities / commodities listed as USDT contracts — not crypto.
+# Most carry a STOCK marker; the rest are matched by explicit base.
+EQUITY_MARKERS = ("STOCK",)
+EQUITY_BASES = {
+    "XAU", "XAG", "XAUT", "OIL", "WTI", "BRENT", "NDX", "SPX", "DJI",
+    "TSLL", "TSLA", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOG", "GOOGL",
+    "NFLX", "AMD", "INTC", "BABA", "COIN", "MSTR", "HOOD", "PLTR", "SMCI",
+    "GME", "AMC", "SPY", "QQQ", "IBIT", "MARA", "RIOT", "CRCL", "HK0700",
+    "HK9988", "HK3690", "US500", "US30", "NAS100", "JP225", "DE40", "UK100",
+}
+
+
+def _is_equity_like(base: str) -> bool:
+    if base in EQUITY_BASES:
+        return True
+    if any(m in base for m in EQUITY_MARKERS):
+        return True
+    # HK0700 / US500-style index or listing codes
+    if len(base) > 4 and base[:2] in ("HK", "US", "JP", "DE", "UK") \
+            and any(ch.isdigit() for ch in base):
+        return True
+    return False
 
 FALLBACK_MAJORS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
@@ -198,7 +226,7 @@ def _perp_klines(symbol: str, start: date,
         return None, f"C-FUT {err}"
     d = data.get("data") if isinstance(data, dict) else None
     if not isinstance(d, dict) or not d.get("time"):
-        return None, f"C-FUT payload: {str(data)[:70]}"
+        return None, f"C-FUT payload: {str(data)[:90]}"
     try:
         recs = []
         for t, o, h, l, c, v in zip(d["time"], d["open"], d["high"],
@@ -254,12 +282,14 @@ def fetch_daily_crypto(symbol: str, start: date, market: str = "perp",
         LAST_ERRORS[symbol] = "source cooling down (rate limited)"
         return None
     df, e1 = _perp_klines(symbol, start, interval)
+    e1 = e1 or "C-FUT no data"
     if df is not None:
         _candles_write(ckey, symbol, df)
         LAST_ERRORS.pop(symbol, None)
         _breaker_report(True)
         return df
     df, e2 = _spot_klines(symbol, start, interval)
+    e2 = e2 or "C-SPOT no data"
     if df is not None:
         _candles_write(ckey, symbol, df)
         LAST_ERRORS.pop(symbol, None)
@@ -278,8 +308,49 @@ def _clean_bases(pairs: list[tuple[str, str]]) -> list[str]:
             continue
         if any(base.endswith(sfx) for sfx in LEVERAGED_SUFFIXES) and len(base) > 3:
             continue
+        if _is_equity_like(base):      # tokenized stocks / commodities
+            continue
         out.append(sym)
     return sorted(set(out))
+
+
+def probe_contract_fields(samples: tuple[str, ...] =
+                          ("MU", "SNDK", "SKHY", "NBIS", "LITE", "BE", "ASTS",
+                           "SPCX", "BTC", "ETH", "XAU", "XAG", "OIL", "EUR")
+                          ) -> dict:
+    """DIAGNOSTIC: fetch the raw contract listing and report (a) the full field
+    set MEXC returns per contract, (b) the distinct values of every low-
+    cardinality field (these are the category labels we need), and (c) the raw
+    records for a few known symbols. Used once to map Stock / Precious Metals /
+    Pre-IPO / Forex correctly instead of guessing from names."""
+    data, err = _get_json(PERP_HOST + "/api/v1/contract/detail", {})
+    lst = (data or {}).get("data") if isinstance(data, dict) else None
+    if not isinstance(lst, list) or not lst:
+        return {"error": err or "no contract list returned"}
+
+    usdt = [c for c in lst if str(c.get("symbol", "")).endswith("_USDT")]
+    fields = sorted({k for c in usdt[:400] for k in c.keys()})
+
+    # candidate category fields: few distinct values across many contracts
+    cat_fields = {}
+    for f in fields:
+        vals = {}
+        for c in usdt:
+            v = c.get(f)
+            if isinstance(v, (str, int, bool)) and not isinstance(v, float):
+                vals[v] = vals.get(v, 0) + 1
+        if 1 < len(vals) <= 30:
+            cat_fields[f] = dict(sorted(vals.items(), key=lambda x: -x[1])[:30])
+
+    wanted = {}
+    for base in samples:
+        rec = next((c for c in usdt
+                    if str(c.get("symbol", "")).upper() == f"{base}_USDT"), None)
+        if rec:
+            wanted[base] = {k: rec.get(k) for k in fields
+                            if isinstance(rec.get(k), (str, int, bool, type(None)))}
+    return {"total_usdt_contracts": len(usdt), "fields": fields,
+            "category_fields": cat_fields, "samples": wanted}
 
 
 def list_symbols(market: str = "perp") -> tuple[list[str], str]:

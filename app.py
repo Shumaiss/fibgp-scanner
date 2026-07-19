@@ -24,6 +24,7 @@ from fibgp_engine import FibGPEngine, EngineResult
 from psx_fetch import (fetch_daily, LAST_ERRORS, CACHE_DIR,
                        repo_symbols, repo_meta, STALE_NOTES)
 from crypto_fetch import (fetch_daily_crypto, list_symbols,
+                          probe_contract_fields,
                           LAST_ERRORS as CRYPTO_ERRORS)
 from symbols import ALL_PSX, KSE100, QUICK25
 
@@ -665,13 +666,21 @@ if failed:
                  "few minutes. (Details logged for the operator.)")
     elif len(failed) > max(3, len(results) // 4):
         st.warning(f"{len(failed)} symbols couldn't be fetched this scan — "
-                   f"likely source rate limiting. Cached symbols are unaffected; "
-                   f"rescan in a few minutes to fill the gaps. "
+                   f"these are usually contracts without enough price history. "
+                   f"Everything else scanned normally. "
                    f"(Details logged for the operator.)")
 with st.expander(f"Skipped symbols ({len(failed)})" if failed else "Skipped symbols (0)"):
     if failed:
         st.markdown(f"<span class='mut' style='font-size:.72rem'>{', '.join(failed)}</span>",
                     unsafe_allow_html=True)
+
+# ---- contract-field probe: open the app URL with ?probe=fields ----
+if st.query_params.get("probe") == "fields":
+    with st.expander("CONTRACT FIELD PROBE", expanded=True):
+        with st.spinner("Reading contract listing…"):
+            info = probe_contract_fields()
+        st.json(info, expanded=True)
+        st.caption("Screenshot or copy this block.")
 
 # ---- operator diagnostics: open the app URL with ?ops=wh4le-ops ----
 if st.query_params.get("ops") == "wh4le-ops":
