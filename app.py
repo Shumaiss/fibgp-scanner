@@ -699,6 +699,24 @@ with st.expander(f"Skipped symbols ({len(failed)})" if failed else "Skipped symb
         st.markdown(f"<span class='mut' style='font-size:.72rem'>{', '.join(failed)}</span>",
                     unsafe_allow_html=True)
 
+# ---- universe probe: open the app URL with ?probe=universe ----
+if st.query_params.get("probe") == "universe":
+    with st.expander("STOCKS & COMMODITIES UNIVERSE", expanded=True):
+        with st.spinner("Reading classified universe…"):
+            _syms, _note = list_symbols("stocks")
+        def _d(s):
+            b = s[:-4] if s.endswith("USDT") else s
+            return b[:-5] if b.endswith("STOCK") and len(b) > 5 else b
+        names = sorted(_d(s) for s in _syms)
+        st.markdown(f"**{len(names)} contracts** ({_note})")
+        st.markdown("<span class='mut' style='font-size:.74rem'>"
+                    + ", ".join(names) + "</span>", unsafe_allow_html=True)
+        _oil = [n for n in names if "OIL" in n]
+        _idx = [n for n in names if n in ("SPY","QQQ","SPX","NDX","DJI","US500",
+                                          "US30","NAS100","JP225","DE40","UK100")]
+        st.caption(f"Oil products found: {_oil or 'NONE'} · "
+                   f"Index products found: {_idx or 'NONE'}")
+
 # ---- contract-field probe: open the app URL with ?probe=fields ----
 if st.query_params.get("probe") == "fields":
     with st.expander("CONTRACT FIELD PROBE", expanded=True):
