@@ -263,12 +263,9 @@ def tv_link(symbol: str) -> str:
     iv = "1W" if tf == "1w" else "1D"
     if market == "psx":
         tv_sym = f"PSX:{symbol}"
-    elif market == "stocks":
-        # open the exchange's OWN tokenized contract — the exact instrument
-        # the scanner reads — not the underlying Nasdaq/HKEX listing
-        contract = (symbol[:-4] + "_USDT") if symbol.endswith("USDT") else symbol
-        return f"https://www.mexc.com/futures/{contract}"
     else:
+        # TradingView chart of the exchange's contract itself — crypto and
+        # tokenized stocks/commodities alike (MEXC:TESLASTOCKUSDT.P etc.)
         tv_sym = f"MEXC:{symbol}.P"
     return (f"https://www.tradingview.com/chart/?symbol={tv_sym}"
             f"&interval={iv}")
