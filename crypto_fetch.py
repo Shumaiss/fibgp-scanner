@@ -1,11 +1,17 @@
 """
-crypto_fetch.py — Crypto OHLCV fetcher, single-exchange edition. (v3.2)
+crypto_fetch.py — Crypto OHLCV fetcher, single-exchange edition. (v4.0)
 
 One exchange only. PERPETUAL futures are the primary source (contract API);
 the same exchange's spot API is the automatic fallback so a missing or
 unreachable contract never blanks the scanner. Universe = all active USDT
 perpetual contracts (spot listing as fallback), leveraged tokens and
 stable-vs-stable pairs excluded.
+
+v4.0: two universes from one listing, classified by the exchange's own
+fields (probed live): "perp" = crypto contracts; "stocks" = tokenized
+equities (STOCK-suffixed symbols), metals (metals plate), oil (typeLabel 4),
+commodities and indices — with Forex (Forex plate / fiat bases) and Pre-IPO
+(plate match + known bases) excluded from both.
 
 v3.2: tokenized-equity / commodity contracts excluded from the universe
 (MEXC lists synthetic AAPL, TSLA, XAU etc. as USDT contracts — they are not
@@ -51,32 +57,48 @@ BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 
 EXCLUDE_BASES = {"USDC", "FDUSD", "TUSD", "DAI", "BUSD", "USDP", "EUR", "GBP",
                  "AEUR", "TRY", "BRL", "ARS", "COP", "UAH", "PLN", "RON",
-                 "ZAR", "MXN", "CZK", "JPY", "XUSD", "USD1", "USDE", "PAXG"}
+                 "ZAR", "MXN", "CZK", "JPY", "XUSD", "USD1", "USDE", "PAXG",
+                 "AUD", "CHF", "CAD", "NZD", "KRW", "SGD", "HKD", "SEK", "NOK"}
 LEVERAGED_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR", "3L", "3S", "2L", "2S",
                       "4L", "4S", "5L", "5S")
 
-# Tokenized equities / commodities listed as USDT contracts — not crypto.
-# Most carry a STOCK marker; the rest are matched by explicit base.
-EQUITY_MARKERS = ("STOCK",)
-EQUITY_BASES = {
-    "XAU", "XAG", "XAUT", "OIL", "WTI", "BRENT", "NDX", "SPX", "DJI",
-    "TSLL", "TSLA", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOG", "GOOGL",
-    "NFLX", "AMD", "INTC", "BABA", "COIN", "MSTR", "HOOD", "PLTR", "SMCI",
-    "GME", "AMC", "SPY", "QQQ", "IBIT", "MARA", "RIOT", "CRCL", "HK0700",
-    "HK9988", "HK3690", "US500", "US30", "NAS100", "JP225", "DE40", "UK100",
-}
+# ---- classification (built from the live field probe) ----
+FIAT_BASES = {"EUR", "GBP", "JPY", "TRY", "BRL", "AUD", "CHF", "CAD", "NZD",
+              "ARS", "COP", "UAH", "PLN", "RON", "ZAR", "MXN", "CZK"}
+COMMODITY_BASES = {"NGAS", "COPPER", "NICKEL", "ZINC", "ALUMINUM", "USOIL",
+                   "UKOIL", "WTI", "BRENT", "XAU", "XAG", "XPT", "XPD"}
+INDEX_BASES = {"SPY", "QQQ", "NDX", "SPX", "DJI", "US500", "US30", "NAS100",
+               "JP225", "DE40", "UK100", "HK50"}
+PREIPO_BASES = {"SPCX", "SPCXSTOCK", "OPENAI", "OPENAISTOCK", "XAI",
+                "ANTHROPIC", "ANTHROPICSTOCK"}
 
 
-def _is_equity_like(base: str) -> bool:
-    if base in EQUITY_BASES:
-        return True
-    if any(m in base for m in EQUITY_MARKERS):
-        return True
-    # HK0700 / US500-style index or listing codes
-    if len(base) > 4 and base[:2] in ("HK", "US", "JP", "DE", "UK") \
-            and any(ch.isdigit() for ch in base):
-        return True
-    return False
+def classify_contract(c: dict) -> str:
+    """'crypto' | 'stocks' | 'excluded' — from the exchange's own fields:
+    STOCK-suffixed bases and typeLabel 4 (oil) and the metals plate are the
+    Stocks & Commodities universe; Forex plate / fiat bases and Pre-IPO
+    plates/bases are excluded everywhere."""
+    base = str(c.get("baseCoin", "")).upper()
+    plate = c.get("conceptPlate")
+    plates = " ".join(str(x) for x in plate).lower() if isinstance(plate, list) \
+        else str(plate or "").lower()
+
+    if "forex" in plates or base in FIAT_BASES:
+        return "excluded"
+    if "pre-ipo" in plates or "preipo" in plates or "pre_ipo" in plates \
+            or base in PREIPO_BASES:
+        return "excluded"
+    if "STOCK" in base or "zone-stock" in plates \
+            or str(c.get("typeLabel")) == "4" \
+            or "metals" in plates or "commodit" in plates \
+            or "indices" in plates or base in COMMODITY_BASES \
+            or base in INDEX_BASES:
+        return "stocks"
+    if base in EXCLUDE_BASES:
+        return "excluded"
+    if any(base.endswith(sfx) for sfx in LEVERAGED_SUFFIXES) and len(base) > 3:
+        return "excluded"
+    return "crypto"
 
 FALLBACK_MAJORS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
@@ -308,8 +330,6 @@ def _clean_bases(pairs: list[tuple[str, str]]) -> list[str]:
             continue
         if any(base.endswith(sfx) for sfx in LEVERAGED_SUFFIXES) and len(base) > 3:
             continue
-        if _is_equity_like(base):      # tokenized stocks / commodities
-            continue
         out.append(sym)
     return sorted(set(out))
 
@@ -376,11 +396,32 @@ def list_symbols(market: str = "perp") -> tuple[list[str], str]:
     data, _ = _get_json(PERP_HOST + "/api/v1/contract/detail", {})
     lst = (data or {}).get("data") if isinstance(data, dict) else None
     if isinstance(lst, list):
+        buckets = {"perp": [], "stocks": []}
         for s in lst:
             raw = str(s.get("symbol", ""))
-            if s.get("quoteCoin") == "USDT" and raw.endswith("_USDT") \
-                    and s.get("state", 0) in (0, "0"):
-                pairs.append((raw.replace("_", ""), raw.split("_")[0]))
+            if not (s.get("quoteCoin") == "USDT" and raw.endswith("_USDT")
+                    and s.get("state", 0) in (0, "0")):
+                continue
+            cat = classify_contract(s)
+            if cat == "crypto":
+                buckets["perp"].append((raw.replace("_", ""), raw.split("_")[0]))
+            elif cat == "stocks":
+                buckets["stocks"].append((raw.replace("_", ""), raw.split("_")[0]))
+        # cache BOTH universes from this one fetch
+        for mk, pr in buckets.items():
+            if pr:
+                try:
+                    os.makedirs(CACHE_DIR, exist_ok=True)
+                    json.dump(_clean_bases(pr) if mk == "perp"
+                              else sorted({sym for sym, _ in pr}),
+                              open(_cache_path("universe", f"{mk}.json"), "w"))
+                except Exception:
+                    pass
+        pairs = buckets.get(market if market in buckets else "perp", [])
+        if market == "stocks":
+            syms = sorted({sym for sym, _ in pairs})
+            if syms:
+                return syms, src
 
     if not pairs:                       # spot listing fallback (same exchange)
         data, _ = _get_json(SPOT_HOST + "/api/v3/exchangeInfo", {})

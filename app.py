@@ -244,13 +244,32 @@ def donut(counts: dict[str, int]) -> str:
             f"font-size='8'>SCANNED</text></svg>")
 
 
+def disp_symbol(symbol: str) -> str:
+    """Human-readable ticker: the exchange's API uses e.g. MUSTOCK_USDT for
+    tokenized equities while displaying MU — mirror that."""
+    if st.session_state.get("scan_market", "psx") == "stocks":
+        base = symbol[:-4] if symbol.endswith("USDT") else symbol
+        if base.endswith("STOCK") and len(base) > 5:
+            return base[:-5]
+        return base
+    return symbol
+
+
 def tv_link(symbol: str) -> str:
     """Chart URL for a ticker: crypto perps get the .P futures symbol,
     PSX tickers the PSX: prefix. Weekly scans open weekly charts."""
     market = st.session_state.get("scan_market", "psx")
     tf = st.session_state.get("scan_tf", "1d")
     iv = "1W" if tf == "1w" else "1D"
-    tv_sym = f"MEXC:{symbol}.P" if market != "psx" else f"PSX:{symbol}"
+    if market == "psx":
+        tv_sym = f"PSX:{symbol}"
+    elif market == "stocks":
+        base = symbol[:-4] if symbol.endswith("USDT") else symbol
+        if base.endswith("STOCK") and len(base) > 5:
+            base = base[:-5]
+        tv_sym = base            # TV resolves the underlying (MU, XAU, USOIL)
+    else:
+        tv_sym = f"MEXC:{symbol}.P"
     return (f"https://www.tradingview.com/chart/?symbol={tv_sym}"
             f"&interval={iv}")
 
@@ -288,12 +307,13 @@ with st.sidebar:
     st.write("")
     universe_choice = st.radio("Universe",
                                ["All PSX", "KSE-100", "Quick 25",
-                                "Crypto", "Custom"])
+                                "Crypto", "Stocks & Commodities", "Custom"])
     market = "psx"
     symbols: list | None = None
     if universe_choice == "Custom":
-        market_lbl = st.selectbox("Market", ["PSX", "Crypto"])
-        market = {"PSX": "psx", "Crypto": "perp"}[market_lbl]
+        market_lbl = st.selectbox("Market", ["PSX", "Crypto", "Stocks & Commodities"])
+        market = {"PSX": "psx", "Crypto": "perp",
+                  "Stocks & Commodities": "stocks"}[market_lbl]
         default_syms = "HBL, UBL, OGDC" if market == "psx" else "BTCUSDT, ETHUSDT, SOLUSDT"
         custom_txt = st.text_area("Symbols", value=default_syms, height=80)
         symbols = sorted({s.strip().upper() for s in
@@ -306,6 +326,8 @@ with st.sidebar:
         symbols = QUICK25
     elif universe_choice == "Crypto":
         market = "perp"       # full contract list resolved at scan time
+    elif universe_choice == "Stocks & Commodities":
+        market = "stocks"     # tokenized equities, metals, oil, indices
 
     timeframe = st.radio("Timeframe", ["Daily", "Weekly"], horizontal=True)
     tf = "1w" if timeframe == "Weekly" else "1d"
@@ -339,9 +361,12 @@ with st.sidebar:
       <div style='font-size:.72rem;margin-top:4px'>{n_cached} symbols cached today<br>
       <span class='mut'>Last scan: {stamp}</span></div></div>""",
         unsafe_allow_html=True)
-    n_lbl = f"{len(symbols)} symbols" if symbols is not None else "all USDT pairs"
+    n_lbl = (f"{len(symbols)} symbols" if symbols is not None
+             else "all contracts" if market == "stocks" else "all USDT pairs")
     tf_lbl = timeframe
-    ttl_lbl = "EOD · cached" if market == "psx" else "24/7 · 15m cache"
+    ttl_lbl = ("EOD · cached" if market == "psx"
+               else "market hours · 15m cache" if market == "stocks"
+               else "24/7 · 15m cache")
     st.caption(f"{n_lbl} · {tf_lbl} · {ttl_lbl}")
 
 
@@ -537,7 +562,7 @@ with left:
         new = " <span class='dgreen'>●</span>" if r.entered_today else ""
         body += (f"<tr><td class='mut'>{i}</td>"
                  f"<td><a class='tick' href='{tv_link(r.symbol)}' "
-                 f"target='_blank' rel='noopener'>{r.symbol}<span class='goto'>↗</span></a>{new}</td>"
+                 f"target='_blank' rel='noopener'>{disp_symbol(r.symbol)}<span class='goto'>↗</span></a>{new}</td>"
                  f"<td class='num'>{fmt_px(r.close)}</td>"
                  f"<td class='num mut'>{fmt_px(r.zone_bot)}</td>"
                  f"<td class='num mut'>{fmt_px(r.zone_top)}</td>"
@@ -624,7 +649,7 @@ with right:
         conf = f" · {tp.conf}" if tp.conf else ""
         st.markdown(f"""<div class='panel toppick'>
           <div class='panel-hd'><span class='damber'>★</span> TOP PICK</div>
-          <a class='sym' href='{tv_link(tp.symbol)}' target='_blank' rel='noopener'>{tp.symbol}<span class='goto'>↗</span></a>
+          <a class='sym' href='{tv_link(tp.symbol)}' target='_blank' rel='noopener'>{disp_symbol(tp.symbol)}<span class='goto'>↗</span></a>
           <div class='mut' style='font-size:.72rem'>{"in" if tp.dist == 0 else f"{tp.dist:.2f}% from"} {side_lbl} zone{conf}</div>
           <div class='px'>{fmt_px(tp.close)} <span class='mut' style='font-size:.8rem'>{"PKR" if st.session_state.get("scan_market","psx")=="psx" else "USDT"}</span></div>
           <div style='margin:6px 0'>{spark}</div>
