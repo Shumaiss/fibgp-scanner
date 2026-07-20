@@ -264,10 +264,10 @@ def tv_link(symbol: str) -> str:
     if market == "psx":
         tv_sym = f"PSX:{symbol}"
     elif market == "stocks":
-        base = symbol[:-4] if symbol.endswith("USDT") else symbol
-        if base.endswith("STOCK") and len(base) > 5:
-            base = base[:-5]
-        tv_sym = base            # TV resolves the underlying (MU, XAU, USOIL)
+        # open the exchange's OWN tokenized contract — the exact instrument
+        # the scanner reads — not the underlying Nasdaq/HKEX listing
+        contract = (symbol[:-4] + "_USDT") if symbol.endswith("USDT") else symbol
+        return f"https://www.mexc.com/futures/{contract}"
     else:
         tv_sym = f"MEXC:{symbol}.P"
     return (f"https://www.tradingview.com/chart/?symbol={tv_sym}"
