@@ -422,7 +422,8 @@ def run_full_scan(syms, start, engine, thr, market, tf):
     for i, s in enumerate(syms):
         df = st.session_state.ohlc_cache.get((s, key))
         prog.progress(0.85 + 0.15 * (i + 1) / len(syms), text=f"Engine… {s}")
-        if df is None or len(df) < 60:
+        min_bars = 35 if market == "stocks" else 60   # tokenized contracts are young listings
+        if df is None or len(df) < min_bars:
             failed.append(s)
             continue
         try:
