@@ -1,5 +1,5 @@
 """
-forex_fetch.py — Daily/weekly OHLC for FX, commodities, indices and shares. (v1.3)
+forex_fetch.py — Daily/weekly OHLC for FX, commodities, indices and shares. (v1.5)
 
 Source: a market-data API (key read from Streamlit secrets or the
 TWELVEDATA_KEY environment variable). Four groups, scanned one at a time:
@@ -13,6 +13,18 @@ Chart links are built elsewhere from BROKER_SYMBOL so the app can send the
 user to their own broker's chart (OANDA / ICMARKETS / CFI) even though the
 candles come from the data provider — prices differ only by spread, which
 is immaterial at daily resolution for zone work.
+
+v1.5: adds a hard per-scan request budget (MAX_REQUESTS_PER_SCAN) and a
+REQUEST_LOG the operator panel displays, so credit use is bounded by
+construction and visible after every scan.
+
+v1.4: credit-aware pacing. The provider meters CREDITS (one per symbol,
+even inside a batch), 8/minute on the basic plan — so batches are cut to 8
+symbols and spaced ~61s apart. A group scan takes ceil(n/8) minutes once,
+then serves from the 6h cache. Per-minute limit responses wait and retry
+the same chunk; daily-quota responses stop the run. After a group prefetch,
+uncached symbols report their error instead of stampeding into per-symbol
+calls.
 
 v1.2: self-batching. fetch_daily_fx() itself pulls the whole group in one
 batched call the first time it is asked for any symbol in that group, so
@@ -48,9 +60,31 @@ CANDLE_TTL = 6 * 3600          # these markets close daily; 6h cache is ample
 LAST_ERRORS: dict[str, str] = {}
 _local = threading.local()
 
+# ---- hard budget: the module cannot exceed this many requests per scan ----
+MAX_REQUESTS_PER_SCAN = 10
+REQUEST_LOG: list[str] = []          # what was actually sent, for diagnostics
+_budget_lock = threading.Lock()
+
+
+def reset_budget():
+    """Called by the app at the start of each scan."""
+    with _budget_lock:
+        REQUEST_LOG.clear()
+        _batched_groups.clear()
+
+
+def _spend_request(symbol_list: str) -> bool:
+    """Record a request; return False if the budget is exhausted."""
+    with _budget_lock:
+        if len(REQUEST_LOG) >= MAX_REQUESTS_PER_SCAN:
+            return False
+        REQUEST_LOG.append(symbol_list[:120])
+        return True
+
 # global pacing — plans meter requests per minute (Basic 8 = 8/min)
-MIN_GAP = 8.0                  # ~7.5/min, just inside the cap
-BATCH_SIZE = 20                # symbols per batched request
+MIN_GAP = 8.0                  # single-call pacing (custom symbols)
+BATCH_SIZE = 8                 # credits per batch == symbols; 8 = the minute cap
+BATCH_WAIT = 61.0              # seconds between batch calls (credit window reset)
 _pace_lock = threading.Lock()
 _last_call = [0.0]
 
@@ -245,21 +279,44 @@ def prefetch_group(displays: list[str], interval: str = "1d") -> tuple[int, int]
         return len(displays) - len(todo), len(displays)
 
     filled = 0
-    for i in range(0, len(todo), BATCH_SIZE):
+    chunks = [todo[i:i + BATCH_SIZE] for i in range(0, len(todo), BATCH_SIZE)]
+    for ci, chunk in enumerate(chunks):
         if _breaker_open():
             break
-        chunk = todo[i:i + BATCH_SIZE]
+        if ci:
+            time.sleep(BATCH_WAIT)             # let the credit window reset
         data_syms = [_LOOKUP.get(d, (d, None))[0] for d in chunk]
+        if not _spend_request(f"BATCH[{len(data_syms)}] {','.join(data_syms)}"):
+            break
         params = {"symbol": ",".join(data_syms),
                   "interval": "1week" if interval == "1w" else "1day",
                   "outputsize": 5000, "order": "ASC",
                   "format": "JSON", "apikey": key}
-        _pace()
-        try:
-            r = _session().get(API_HOST + "/time_series", params=params, timeout=60)
-            payload = r.json() if r.status_code == 200 else None
-        except (requests.RequestException, ValueError):
-            payload = None
+
+        payload = None
+        for attempt in range(3):               # minute-limit -> wait, retry chunk
+            try:
+                r = _session().get(API_HOST + "/time_series", params=params,
+                                   timeout=60)
+                payload = r.json() if r.status_code == 200 else None
+            except (requests.RequestException, ValueError):
+                payload = None
+            if isinstance(payload, dict) and payload.get("status") == "error" \
+                    and "values" not in payload:
+                msg = str(payload.get("message", "")).lower()
+                if "current minute" in msg or "per minute" in msg:
+                    time.sleep(BATCH_WAIT)
+                    continue
+                if "current day" in msg or "daily" in msg:
+                    with _thr_lock:            # day quota gone: stop the run
+                        _thr["down_until"] = time.time() + 3600
+                    for d in chunk:
+                        LAST_ERRORS[d] = "FX-API daily quota exhausted"
+                    return filled + (len(displays) - len(todo)), len(displays)
+                for d in chunk:
+                    LAST_ERRORS[d] = f"FX-API {str(payload.get('message',''))[:80]}"
+                payload = None
+            break
         if not isinstance(payload, dict):
             _breaker_report(False)
             continue
@@ -337,6 +394,10 @@ def fetch_daily_fx(display: str, start: date,
             if len(cut):
                 LAST_ERRORS.pop(display, None)
                 return cut
+        # group prefetch ran and this symbol still has no data: report,
+        # never fall through to a per-symbol call (credit stampede)
+        LAST_ERRORS.setdefault(display, "FX-API no data after group fetch")
+        return None
 
     key = _api_key()
     if not key:
@@ -347,6 +408,10 @@ def fetch_daily_fx(display: str, start: date,
         return None
 
     data_sym = _LOOKUP.get(display, (display, None))[0]
+    if not _spend_request(f"SINGLE {data_sym}"):
+        LAST_ERRORS[display] = ("FX-API request budget reached — batch should "
+                                "have covered this symbol")
+        return None
     params = {"symbol": data_sym,
               "interval": "1week" if interval == "1w" else "1day",
               "outputsize": 5000, "order": "ASC",

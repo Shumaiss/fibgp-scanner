@@ -24,7 +24,8 @@ from fibgp_engine import FibGPEngine, EngineResult
 from psx_fetch import (fetch_daily, LAST_ERRORS, CACHE_DIR,
                        repo_symbols, repo_meta, STALE_NOTES)
 from forex_fetch import (fetch_daily_fx, list_symbols_fx, tv_symbol_fx,
-                         prefetch_group, LAST_ERRORS as FX_ERRORS)
+                         prefetch_group, reset_budget, REQUEST_LOG,
+                         LAST_ERRORS as FX_ERRORS)
 from crypto_fetch import (fetch_daily_crypto, list_symbols,
                           probe_contract_fields,
                           LAST_ERRORS as CRYPTO_ERRORS)
@@ -416,13 +417,19 @@ def run_full_scan(syms, start, engine, thr, market, tf):
         if market == "psx":
             df = fetch_daily(s, start)
             return to_weekly(df) if (tf == "1w" and df is not None) else df
+        if market == "fx":
+            return fetch_daily_fx(s, start, tf)   # provider serves weekly natively
         # crypto: native weekly candles; pull deeper history for weekly depth
         c_start = start if tf == "1d" else date.today() - relativedelta(months=60)
         return fetch_daily_crypto(s, c_start, market, tf)
 
+    if market == "fx":
+        reset_budget()
     if market == "fx" and syms:
         # one batched call per 20 symbols instead of one call per symbol
-        prog.progress(0.02, text="Fetching market data…")
+        _est = max(1, -(-len(syms) // 8))     # ceil: 8 symbols per minute
+        prog.progress(0.02, text=f"Fetching market data… (~{_est} min on the "
+                                 f"current data plan)")
         prefetch_group(list(syms), tf)
     to_fetch = [s for s in syms if (s, key) not in st.session_state.ohlc_cache]
     done = 0
@@ -760,5 +767,10 @@ if st.query_params.get("ops") == "wh4le-ops":
                 st.markdown(f"`{n}x` {r}")
             st.caption("Raw provider messages appear above verbatim; "
                        "'cooling down' means the app stopped itself.")
+            if REQUEST_LOG:
+                st.markdown(f"**Provider requests this scan: {len(REQUEST_LOG)}**")
+                for line in REQUEST_LOG[:14]:
+                    st.markdown(f"<span class='mut' style='font-size:.7rem'>"
+                                f"{line}</span>", unsafe_allow_html=True)
         else:
             st.markdown("No failures in the last scan.")
