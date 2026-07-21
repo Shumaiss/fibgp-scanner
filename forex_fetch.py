@@ -1,5 +1,5 @@
 """
-forex_fetch.py — Daily/weekly OHLC for FX, commodities, indices and shares. (v1.1)
+forex_fetch.py — Daily/weekly OHLC for FX, commodities, indices and shares. (v1.2)
 
 Source: a market-data API (key read from Streamlit secrets or the
 TWELVEDATA_KEY environment variable). Four groups, scanned one at a time:
@@ -13,6 +13,11 @@ Chart links are built elsewhere from BROKER_SYMBOL so the app can send the
 user to their own broker's chart (OANDA / ICMARKETS / CFI) even though the
 candles come from the data provider — prices differ only by spread, which
 is immaterial at daily resolution for zone work.
+
+v1.2: self-batching. fetch_daily_fx() itself pulls the whole group in one
+batched call the first time it is asked for any symbol in that group, so
+batching cannot be bypassed by an older call path. A scan of any group
+costs 1-2 credits total.
 
 v1.1: batched requests. The provider accepts a comma-separated symbol
 list and returns all of them in ONE call, so a 36-symbol group costs ~2
@@ -136,6 +141,9 @@ def list_symbols_fx(group: str = "all") -> tuple[list[str], str]:
 
 # backwards-compatible alias
 list_symbols = list_symbols_fx
+
+
+_GROUP_OF = {disp: g for g, rows in GROUPS.items() for _, disp, _ in rows}
 
 
 def tv_symbol_fx(display: str) -> str:
@@ -285,15 +293,36 @@ def prefetch_group(displays: list[str], interval: str = "1d") -> tuple[int, int]
 
 
 # ============================== FETCH =========================================
+_batched_groups: set[tuple[str, str]] = set()
+
+
 def fetch_daily_fx(display: str, start: date,
                    interval: str = "1d") -> pd.DataFrame | None:
-    """Daily/weekly OHLC for one symbol. 6h disk cache."""
+    """Daily/weekly OHLC for one symbol. 6h disk cache.
+
+    The first call for any symbol in a group triggers ONE batched request
+    that caches the entire group — so a whole scan costs 1-2 credits even
+    when callers ask symbol by symbol."""
     cached = _cache_read(display, interval)
     if cached is not None:
         cut = cached.loc[cached.index.date >= start]
         if len(cut):
             LAST_ERRORS.pop(display, None)
             return cut
+
+    grp = _GROUP_OF.get(display)
+    if grp and (grp, interval) not in _batched_groups:
+        _batched_groups.add((grp, interval))
+        try:
+            prefetch_group([d for _, d, _ in GROUPS[grp]], interval)
+        except Exception:
+            pass
+        cached = _cache_read(display, interval)
+        if cached is not None:
+            cut = cached.loc[cached.index.date >= start]
+            if len(cut):
+                LAST_ERRORS.pop(display, None)
+                return cut
 
     key = _api_key()
     if not key:
