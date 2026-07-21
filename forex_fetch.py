@@ -1,5 +1,5 @@
 """
-forex_fetch.py — Daily/weekly OHLC for FX, commodities, indices and shares. (v1.0)
+forex_fetch.py — Daily/weekly OHLC for FX, commodities, indices and shares. (v1.1)
 
 Source: a market-data API (key read from Streamlit secrets or the
 TWELVEDATA_KEY environment variable). Four groups, scanned one at a time:
@@ -13,6 +13,13 @@ Chart links are built elsewhere from BROKER_SYMBOL so the app can send the
 user to their own broker's chart (OANDA / ICMARKETS / CFI) even though the
 candles come from the data provider — prices differ only by spread, which
 is immaterial at daily resolution for zone work.
+
+v1.1: batched requests. The provider accepts a comma-separated symbol
+list and returns all of them in ONE call, so a 36-symbol group costs ~2
+credits instead of 36 — essential on plans metered per minute (e.g. 8/min).
+Batches are prefetched into the disk cache before the scan loop runs; the
+per-symbol path then serves from cache. Falls back to single requests if a
+batch response is unusable.
 
 Provider name never surfaces in the UI; failures land in LAST_ERRORS
 tagged FX-API for the operator diagnostics panel.
@@ -36,8 +43,9 @@ CANDLE_TTL = 6 * 3600          # these markets close daily; 6h cache is ample
 LAST_ERRORS: dict[str, str] = {}
 _local = threading.local()
 
-# global pacing — free tiers meter requests per minute
-MIN_GAP = 0.9
+# global pacing — plans meter requests per minute (Basic 8 = 8/min)
+MIN_GAP = 8.0                  # ~7.5/min, just inside the cap
+BATCH_SIZE = 20                # symbols per batched request
 _pace_lock = threading.Lock()
 _last_call = [0.0]
 
@@ -200,6 +208,80 @@ def _cache_write(display: str, interval: str, df: pd.DataFrame):
         df.to_csv(_cache_path(display, interval))
     except Exception:
         pass
+
+
+# ============================== BATCH PREFETCH ================================
+def _rows_to_frame(values) -> pd.DataFrame | None:
+    recs = []
+    for v in values or []:
+        try:
+            recs.append({"Date": pd.Timestamp(v["datetime"][:10]),
+                         "Open": float(v["open"]), "High": float(v["high"]),
+                         "Low": float(v["low"]), "Close": float(v["close"]),
+                         "Volume": float(v.get("volume") or 0)})
+        except (KeyError, ValueError, TypeError):
+            continue
+    if not recs:
+        return None
+    df = pd.DataFrame(recs).set_index("Date").sort_index()
+    return df[~df.index.duplicated(keep="last")]
+
+
+def prefetch_group(displays: list[str], interval: str = "1d") -> tuple[int, int]:
+    """Fetch a whole group in batched calls and fill the disk cache.
+    Returns (cached_now, requested). Safe to call before every scan — symbols
+    already fresh in cache are skipped."""
+    key = _api_key()
+    todo = [d for d in displays if _cache_read(d, interval) is None]
+    if not todo or not key:
+        return len(displays) - len(todo), len(displays)
+
+    filled = 0
+    for i in range(0, len(todo), BATCH_SIZE):
+        if _breaker_open():
+            break
+        chunk = todo[i:i + BATCH_SIZE]
+        data_syms = [_LOOKUP.get(d, (d, None))[0] for d in chunk]
+        params = {"symbol": ",".join(data_syms),
+                  "interval": "1week" if interval == "1w" else "1day",
+                  "outputsize": 5000, "order": "ASC",
+                  "format": "JSON", "apikey": key}
+        _pace()
+        try:
+            r = _session().get(API_HOST + "/time_series", params=params, timeout=60)
+            payload = r.json() if r.status_code == 200 else None
+        except (requests.RequestException, ValueError):
+            payload = None
+        if not isinstance(payload, dict):
+            _breaker_report(False)
+            continue
+
+        # single-symbol responses come back flat; multi-symbol keyed by symbol
+        if "values" in payload:
+            payload = {data_syms[0]: payload}
+
+        got = False
+        for disp, dsym in zip(chunk, data_syms):
+            entry = payload.get(dsym)
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("status") == "error":
+                LAST_ERRORS[disp] = f"FX-API {str(entry.get('message',''))[:70]}"
+                continue
+            df = _rows_to_frame(entry.get("values"))
+            if df is not None:
+                _cache_write(disp, interval, df)
+                LAST_ERRORS.pop(disp, None)
+                filled += 1
+                got = True
+        _breaker_report(got)
+        if not got and isinstance(payload.get("message"), str):
+            msg = payload["message"].lower()
+            if "credit" in msg or "limit" in msg or "quota" in msg:
+                with _thr_lock:
+                    _thr["down_until"] = time.time() + _COOLDOWN
+                break
+    return filled + (len(displays) - len(todo)), len(displays)
 
 
 # ============================== FETCH =========================================

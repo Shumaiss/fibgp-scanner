@@ -24,7 +24,7 @@ from fibgp_engine import FibGPEngine, EngineResult
 from psx_fetch import (fetch_daily, LAST_ERRORS, CACHE_DIR,
                        repo_symbols, repo_meta, STALE_NOTES)
 from forex_fetch import (fetch_daily_fx, list_symbols_fx, tv_symbol_fx,
-                         LAST_ERRORS as FX_ERRORS)
+                         prefetch_group, LAST_ERRORS as FX_ERRORS)
 from crypto_fetch import (fetch_daily_crypto, list_symbols,
                           probe_contract_fields,
                           LAST_ERRORS as CRYPTO_ERRORS)
@@ -420,6 +420,10 @@ def run_full_scan(syms, start, engine, thr, market, tf):
         c_start = start if tf == "1d" else date.today() - relativedelta(months=60)
         return fetch_daily_crypto(s, c_start, market, tf)
 
+    if market == "fx" and syms:
+        # one batched call per 20 symbols instead of one call per symbol
+        prog.progress(0.02, text="Fetching market data…")
+        prefetch_group(list(syms), tf)
     to_fetch = [s for s in syms if (s, key) not in st.session_state.ohlc_cache]
     done = 0
     if to_fetch:
