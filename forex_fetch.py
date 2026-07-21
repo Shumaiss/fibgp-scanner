@@ -326,11 +326,16 @@ def fetch_daily_fx(display: str, start: date,
         return None
 
     if isinstance(payload, dict) and payload.get("status") == "error":
-        msg = str(payload.get("message", ""))[:90]
+        msg = str(payload.get("message", ""))[:120]
         LAST_ERRORS[display] = f"FX-API {msg}"
         # credit/limit exhaustion is precisely when we must stop hammering
         _breaker_report(False)
         low = msg.lower()
+        if "per minute" in low or "minutely" in low:
+            with _thr_lock:                     # short pause for a minute cap
+                _thr["down_until"] = time.time() + 65
+                _thr["fails"] = 0
+            return None
         if "credit" in low or "limit" in low or "quota" in low:
             with _thr_lock:                     # trip immediately, don't wait
                 _thr["down_until"] = time.time() + _COOLDOWN

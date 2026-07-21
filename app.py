@@ -758,5 +758,7 @@ if st.query_params.get("ops") == "wh4le-ops":
                 _summary[r] = _summary.get(r, 0) + 1
             for r, n in sorted(_summary.items(), key=lambda x: -x[1]):
                 st.markdown(f"`{n}x` {r}")
+            st.caption("Raw provider messages appear above verbatim; "
+                       "'cooling down' means the app stopped itself.")
         else:
             st.markdown("No failures in the last scan.")
