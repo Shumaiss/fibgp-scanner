@@ -23,6 +23,8 @@ import streamlit as st
 from fibgp_engine import FibGPEngine, EngineResult
 from psx_fetch import (fetch_daily, LAST_ERRORS, CACHE_DIR,
                        repo_symbols, repo_meta, STALE_NOTES)
+from forex_fetch import (fetch_daily_fx, list_symbols_fx, tv_symbol_fx,
+                         LAST_ERRORS as FX_ERRORS)
 from crypto_fetch import (fetch_daily_crypto, list_symbols,
                           probe_contract_fields,
                           LAST_ERRORS as CRYPTO_ERRORS)
@@ -247,7 +249,12 @@ def donut(counts: dict[str, int]) -> str:
 def disp_symbol(symbol: str) -> str:
     """Human-readable ticker: the exchange's API uses e.g. MUSTOCK_USDT for
     tokenized equities while displaying MU — mirror that."""
-    if st.session_state.get("scan_market", "psx") == "stocks":
+    if st.session_state.get("scan_market", "psx") == "fx":
+        return symbol
+    _mk = st.session_state.get("scan_market", "psx")
+    if _mk.startswith("fx:"):
+        return symbol
+    if _mk == "stocks":
         base = symbol[:-4] if symbol.endswith("USDT") else symbol
         if base.endswith("STOCK") and len(base) > 5:
             return base[:-5]
@@ -263,6 +270,8 @@ def tv_link(symbol: str) -> str:
     iv = "1W" if tf == "1w" else "1D"
     if market == "psx":
         tv_sym = f"PSX:{symbol}"
+    elif market == "fx":
+        tv_sym = tv_symbol_fx(symbol)
     else:
         # TradingView chart of the exchange's contract itself — crypto and
         # tokenized stocks/commodities alike (MEXC:TESLASTOCKUSDT.P etc.)
@@ -304,13 +313,20 @@ with st.sidebar:
     st.write("")
     universe_choice = st.radio("Universe",
                                ["All PSX", "KSE-100", "Quick 25",
-                                "Crypto", "Stocks & Commodities", "Custom"])
+                                "Crypto", "Stocks & Commodities",
+                                "Forex", "Custom"])
+    fx_group = "fx"
+    if universe_choice == "Forex":
+        fx_group = {"FX Pairs": "fx", "Commodities": "commodities",
+                    "Indices": "indices", "Shares": "shares"}[
+            st.radio("Group", ["FX Pairs", "Commodities", "Indices", "Shares"])]
     market = "psx"
     symbols: list | None = None
     if universe_choice == "Custom":
-        market_lbl = st.selectbox("Market", ["PSX", "Crypto", "Stocks & Commodities"])
+        market_lbl = st.selectbox("Market", ["PSX", "Crypto",
+                                             "Stocks & Commodities", "Forex"])
         market = {"PSX": "psx", "Crypto": "perp",
-                  "Stocks & Commodities": "stocks"}[market_lbl]
+                  "Stocks & Commodities": "stocks", "Forex": "fx"}[market_lbl]
         default_syms = "HBL, UBL, OGDC" if market == "psx" else "BTCUSDT, ETHUSDT, SOLUSDT"
         custom_txt = st.text_area("Symbols", value=default_syms, height=80)
         symbols = sorted({s.strip().upper() for s in
@@ -325,6 +341,9 @@ with st.sidebar:
         market = "perp"       # full contract list resolved at scan time
     elif universe_choice == "Stocks & Commodities":
         market = "stocks"     # tokenized equities, metals, oil, indices
+    elif universe_choice == "Forex":
+        market = "fx"         # real forex, commodities, indices, shares
+        symbols, _ = list_symbols_fx(fx_group)
 
     timeframe = st.radio("Timeframe", ["Daily", "Weekly"], horizontal=True)
     tf = "1w" if timeframe == "Weekly" else "1d"
@@ -359,10 +378,11 @@ with st.sidebar:
       <span class='mut'>Last scan: {stamp}</span></div></div>""",
         unsafe_allow_html=True)
     n_lbl = (f"{len(symbols)} symbols" if symbols is not None
-             else "all contracts" if market == "stocks" else "all USDT pairs")
+             else "all contracts" if market == "stocks"
+             else "75 instruments" if market == "fx" else "all USDT pairs")
     tf_lbl = timeframe
     ttl_lbl = ("EOD · cached" if market == "psx"
-               else "market hours · 15m cache" if market == "stocks"
+               else "market hours · 15m cache" if market in ("stocks", "fx")
                else "24/7 · 15m cache")
     st.caption(f"{n_lbl} · {tf_lbl} · {ttl_lbl}")
 
@@ -403,7 +423,7 @@ def run_full_scan(syms, start, engine, thr, market, tf):
     to_fetch = [s for s in syms if (s, key) not in st.session_state.ohlc_cache]
     done = 0
     if to_fetch:
-        workers = 2 if market == "psx" else 3
+        workers = 2 if market == "psx" else (2 if market == "fx" else 3)
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {ex.submit(_fetch, s): s for s in to_fetch}
             for fut in as_completed(futs):
@@ -419,7 +439,7 @@ def run_full_scan(syms, start, engine, thr, market, tf):
     for i, s in enumerate(syms):
         df = st.session_state.ohlc_cache.get((s, key))
         prog.progress(0.85 + 0.15 * (i + 1) / len(syms), text=f"Engine… {s}")
-        min_bars = 35 if market == "stocks" else 60   # tokenized contracts are young listings
+        min_bars = 35 if market == "stocks" else 60   # young tokenized listings; fx/crypto/psx have depth
         if df is None or len(df) < min_bars:
             failed.append(s)
             continue
@@ -681,7 +701,7 @@ if _stale:
             f"available data (as of {_oldest}) for {len(_stale)} symbols. "
             f"Rescan later for fresh prices.")
 if failed:
-    _all_err = {**LAST_ERRORS, **CRYPTO_ERRORS}
+    _all_err = {**LAST_ERRORS, **CRYPTO_ERRORS, **FX_ERRORS}
     reasons = {_all_err.get(s, "unknown") for s in failed}
     print("FETCH DIAGNOSTICS:", "; ".join(sorted(reasons)), flush=True)  # server logs
     if not results:
@@ -726,7 +746,7 @@ if st.query_params.get("probe") == "fields":
 # ---- operator diagnostics: open the app URL with ?ops=wh4le-ops ----
 if st.query_params.get("ops") == "wh4le-ops":
     with st.expander("OPERATOR DIAGNOSTICS", expanded=True):
-        _all_err = {**LAST_ERRORS, **CRYPTO_ERRORS}
+        _all_err = {**LAST_ERRORS, **CRYPTO_ERRORS, **FX_ERRORS}
         if failed:
             _summary = {}
             for s in failed:
