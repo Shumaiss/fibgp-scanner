@@ -1,5 +1,5 @@
 """
-forex_fetch.py — Daily/weekly OHLC for FX, commodities, indices and shares. (v1.2)
+forex_fetch.py — Daily/weekly OHLC for FX, commodities, indices and shares. (v1.3)
 
 Source: a market-data API (key read from Streamlit secrets or the
 TWELVEDATA_KEY environment variable). Four groups, scanned one at a time:
@@ -264,7 +264,13 @@ def prefetch_group(displays: list[str], interval: str = "1d") -> tuple[int, int]
             _breaker_report(False)
             continue
 
-        # single-symbol responses come back flat; multi-symbol keyed by symbol
+        # Response shapes:
+        #   single symbol -> {"meta":{...},"values":[...],"status":"ok"}
+        #   multi symbol  -> {"AAPL":{"meta":..,"values":[..],"status":"ok"},
+        #                     "MSFT":{...}, "status":"ok"}
+        # NOTE: the outer dict carries its own "status" key alongside the
+        # symbol keys, so presence of "values" (not absence of "status") is
+        # what distinguishes the flat form.
         if "values" in payload:
             payload = {data_syms[0]: payload}
 
@@ -272,9 +278,17 @@ def prefetch_group(displays: list[str], interval: str = "1d") -> tuple[int, int]
         for disp, dsym in zip(chunk, data_syms):
             entry = payload.get(dsym)
             if not isinstance(entry, dict):
+                # provider may key by the symbol without the slash, or upper-case
+                for alt in (dsym.replace("/", ""), dsym.upper(),
+                            dsym.replace("/", "").upper()):
+                    if isinstance(payload.get(alt), dict):
+                        entry = payload[alt]
+                        break
+            if not isinstance(entry, dict):
+                LAST_ERRORS[disp] = "FX-API symbol missing from batch response"
                 continue
-            if entry.get("status") == "error":
-                LAST_ERRORS[disp] = f"FX-API {str(entry.get('message',''))[:70]}"
+            if entry.get("status") == "error" or "values" not in entry:
+                LAST_ERRORS[disp] = f"FX-API {str(entry.get('message', 'no values'))[:70]}"
                 continue
             df = _rows_to_frame(entry.get("values"))
             if df is not None:
