@@ -151,7 +151,9 @@ INDICES = [
     ("TOP40", "SA40", "ICMARKETS:SA40"),
 ]
 
-SHARES = [(t, t, f"ICMARKETS:{t}") for t in
+# US shares: TradingView resolves bare tickers to the primary listing.
+# (Broker CFD prefixes are not published for individual shares.)
+SHARES = [(t, t, t) for t in
           ("AAPL", "AMD", "AMZN", "BA", "COIN", "GOOG", "INTC", "META",
            "MSTR", "NFLX", "NVDA", "PLTR", "SHOP", "SMCI", "TSLA", "UBER")]
 
