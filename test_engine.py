@@ -121,6 +121,33 @@ def test_inside_zone_bucket():
     print(f"  inside-zone OK: close={res.close:.1f} in {sup[0].zone_bot:.1f}-{sup[0].zone_top:.1f}")
 
 
+def test_resistance_targets():
+    """R1-R4 restored: extensions of the resistance leg at
+    1.27 / 1.618 / 2.618 / 4.236, only levels above the zone top."""
+    # a clean down-leg then a bounce that stays under the pocket -> resistance
+    path = (ramp(100, 200, 30)      # rally: builds a swing high at 200
+            + ramp(200, 120, 24)    # decline: leg 200->120 (down)
+            + ramp(120, 150, 10))   # partial bounce, stays below pocket
+    o, h, l, c = make_bars(path, spread=0.5)
+    res = FibGPEngine().run(o, h, l, c)
+    assert res.resistance is not None, "no resistance formed"
+    tgts = res.upside_targets
+    assert tgts, "no targets computed"
+    names = [n for n, _ in tgts]
+    assert names == [n for n in ("R1", "R2", "R3", "R4") if n in names]
+    # every target must sit above the zone top
+    for _, px in tgts:
+        assert px > res.resistance.top
+    # verify the multipliers against the leg
+    lo, hi = res.resistance.leg_lo, res.resistance.leg_hi
+    rng = hi - lo
+    expected = {f"R{i}": lo + m * rng for i, m in
+                enumerate((1.27, 1.618, 2.618, 4.236), start=1)}
+    for name, px in tgts:
+        assert abs(px - expected[name]) < 1e-6, (name, px, expected[name])
+    print(f"  targets OK: {', '.join(f'{n}={p:.1f}' for n, p in tgts)}")
+
+
 def test_rsi_stoch_sane():
     rng = np.random.default_rng(42)
     steps = rng.normal(0, 1.0, 300).cumsum() + 100
@@ -222,7 +249,7 @@ if __name__ == "__main__":
                test_stale_rejection, test_classifier_buckets,
                test_inside_zone_bucket, test_min_leg_atr_filter,
                test_no_reaching_backward, test_leg_extension,
-               test_rsi_stoch_sane]:
+               test_resistance_targets, test_rsi_stoch_sane]:
         print(f"[{fn.__name__}]")
         fn()
     print("\nAll engine tests passed.")

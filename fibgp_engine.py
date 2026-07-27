@@ -11,7 +11,7 @@ the v11.5.3 base:
   • Leg extension: a found pivot pair extends forward through newer pivots
     to the full swing extreme (stops when the structure breaks) — stair-step
     trends form one full-structure leg
-  • Upside targets removed (1.4/1.7/2.4/3.4 extensions dropped)
+  • Resistance targets R1-R4 (1.27/1.618/2.618/4.236 of the resistance leg)
   • Stochastic health score is frozen at the cross (marker formula:
     extreme zone, momentum, K-velocity); live score and ⚠ near-cross
     warning removed. RSI(7) retained as scanner-side analytics. Execution model mirrors Pine exactly: the engine is a
@@ -31,7 +31,7 @@ Ported components:
                              FVG-in-zone (3-candle, ≥50% unfilled, lookback 50)
   • Indicators             — RSI(7) Wilder, Stoch(5,3,3) + persistent BUY/SELL
                              signal, 3-point health score, near-cross warning
-  • Upside targets         — 1.4 / 1.7 / 2.4 / 3.4 extensions of the active leg
+  • Resistance targets     — R1-R4 at 1.27/1.618/2.618/4.236 of the resistance leg
 
 Bar "time" is represented by integer bar index (data is daily & monotonic, so
 index comparisons are equivalent to Pine's ms-timestamp comparisons).
@@ -49,13 +49,14 @@ import numpy as np
 # ============================== DEFAULT INPUTS ================================
 # Mirrors the Pine input() defaults exactly.
 PIV_LEFT = 5
-PIV_RIGHT = 3
+PIV_RIGHT = 1
 USE_LIVE = True
 MAX_PIVOTS = 80
 
 FVG_LOOKBACK = 50
 STALE_CAP = 480          # f_supStale / f_resStale search cap
 MIN_LEG_ATR = 2.5        # min leg span in ATRs to qualify as a zone
+TARGET_MULTS = (1.27, 1.618, 2.618, 4.236)   # R1-R4 resistance extensions
 
 RSI_LEN = 7
 STOCH_K = 5
@@ -652,6 +653,17 @@ class FibGPEngine:
             if self.use_fvg_conf:
                 res_fvg = self._fvg_in_zone(high, low, last, resistance.top, resistance.bot)
 
+        # ---- resistance targets R1-R4 (extensions of the resistance leg) ----
+        upside_targets = []
+        if resistance is not None and not math.isnan(resistance.leg_lo) \
+                and not math.isnan(resistance.leg_hi):
+            leg_rng = resistance.leg_hi - resistance.leg_lo
+            if leg_rng > 0:
+                for idx, mult in enumerate(TARGET_MULTS, start=1):
+                    px = resistance.leg_lo + mult * leg_rng
+                    if px > resistance.top:      # only levels above the zone
+                        upside_targets.append((f"R{idx}", float(px)))
+
         # ---- stochastic final state (Trader Pro: score frozen at cross,
         #      no live score, no near-cross warning) ----
         st = StochState()
@@ -670,6 +682,7 @@ class FibGPEngine:
             sup_fvg=sup_fvg,
             res_ema_tag=res_ema_tag,
             res_fvg=res_fvg,
+            upside_targets=upside_targets,
             entered_sup_today=entered_sup_today,
             entered_res_today=entered_res_today,
             n_bars=n,
