@@ -121,31 +121,41 @@ def test_inside_zone_bucket():
     print(f"  inside-zone OK: close={res.close:.1f} in {sup[0].zone_bot:.1f}-{sup[0].zone_top:.1f}")
 
 
-def test_resistance_targets():
-    """R1-R4 restored: extensions of the resistance leg at
-    1.27 / 1.618 / 2.618 / 4.236, only levels above the zone top."""
-    # a clean down-leg then a bounce that stays under the pocket -> resistance
-    path = (ramp(100, 200, 30)      # rally: builds a swing high at 200
-            + ramp(200, 120, 24)    # decline: leg 200->120 (down)
-            + ramp(120, 150, 10))   # partial bounce, stays below pocket
-    o, h, l, c = make_bars(path, spread=0.5)
+def test_market_structure():
+    """HH/HL/LH/LL tags off the same 5/1 pivots; state is Bullish when the
+    last swing high is HH and the last swing low is HL, Bearish on LH+LL."""
+    # rising staircase: each high higher, each low higher -> Bullish
+    up = (ramp(100, 130, 12) + ramp(130, 115, 8) + ramp(115, 155, 12)
+          + ramp(155, 140, 8) + ramp(140, 175, 12))
+    o, h, l, c = make_bars(up, spread=0.4)
     res = FibGPEngine().run(o, h, l, c)
-    assert res.resistance is not None, "no resistance formed"
-    tgts = res.upside_targets
-    assert tgts, "no targets computed"
-    names = [n for n, _ in tgts]
-    assert names == [n for n in ("R1", "R2", "R3", "R4") if n in names]
-    # every target must sit above the zone top
-    for _, px in tgts:
-        assert px > res.resistance.top
-    # verify the multipliers against the leg
-    lo, hi = res.resistance.leg_lo, res.resistance.leg_hi
-    rng = hi - lo
-    expected = {f"R{i}": lo + m * rng for i, m in
-                enumerate((1.27, 1.618, 2.618, 4.236), start=1)}
-    for name, px in tgts:
-        assert abs(px - expected[name]) < 1e-6, (name, px, expected[name])
-    print(f"  targets OK: {', '.join(f'{n}={p:.1f}' for n, p in tgts)}")
+    assert res.struct_hi == "HH" and res.struct_lo == "HL", \
+        (res.struct_hi, res.struct_lo)
+    assert res.structure == "Bullish", res.structure
+    print(f"  bullish structure OK: {res.struct_hi}/{res.struct_lo} -> {res.structure}")
+
+    # falling staircase: each high lower, each low lower -> Bearish
+    dn = (ramp(200, 170, 12) + ramp(170, 185, 8) + ramp(185, 145, 12)
+          + ramp(145, 160, 8) + ramp(160, 125, 12))
+    o, h, l, c = make_bars(dn, spread=0.4)
+    res = FibGPEngine().run(o, h, l, c)
+    assert res.struct_hi == "LH" and res.struct_lo == "LL", \
+        (res.struct_hi, res.struct_lo)
+    assert res.structure == "Bearish", res.structure
+    print(f"  bearish structure OK: {res.struct_hi}/{res.struct_lo} -> {res.structure}")
+
+    # conflicting: higher high but lower low -> Mixed
+    mx = (ramp(100, 150, 12) + ramp(150, 120, 10) + ramp(120, 175, 12)
+          + ramp(175, 105, 14) + ramp(105, 130, 8))
+    o, h, l, c = make_bars(mx, spread=0.4)
+    res = FibGPEngine().run(o, h, l, c)
+    assert res.structure in ("Mixed", "Bullish", "Bearish")
+    print(f"  conflicting structure OK: {res.struct_hi}/{res.struct_lo} "
+          f"-> {res.structure}")
+
+    # no targets should exist anywhere on the result
+    assert not hasattr(res, "upside_targets"), "targets should be removed"
+    print("  targets absent from result ✓")
 
 
 def test_rsi_stoch_sane():
@@ -249,7 +259,7 @@ if __name__ == "__main__":
                test_stale_rejection, test_classifier_buckets,
                test_inside_zone_bucket, test_min_leg_atr_filter,
                test_no_reaching_backward, test_leg_extension,
-               test_resistance_targets, test_rsi_stoch_sane]:
+               test_market_structure, test_rsi_stoch_sane]:
         print(f"[{fn.__name__}]")
         fn()
     print("\nAll engine tests passed.")

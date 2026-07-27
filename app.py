@@ -162,6 +162,7 @@ class Row:
     stoch_dots: str
     zone_age: int
     entered_today: bool
+    structure: str = "—"     # Bullish / Bearish / Mixed
 
 
 BADGE = {
@@ -195,7 +196,8 @@ def build_row(sym: str, r: EngineResult, thr: float) -> Row:
 
     if not cand:
         return Row(sym, c, "NO_ZONE", "", math.nan, math.nan, math.inf, 0, "",
-                   "", r.rsi, r.stoch.signal, r.stoch.dots, 0, False)
+                   "", r.rsi, r.stoch.signal, r.stoch.dots, 0, False,
+                   r.structure)
 
     dist, side, z = min(cand, key=lambda x: x[0])
     if dist == 0.0:
@@ -207,7 +209,7 @@ def build_row(sym: str, r: EngineResult, thr: float) -> Row:
     entered = r.entered_sup_today if side == "sup" else r.entered_res_today
     return Row(sym, c, status, side, z.bot, z.top, dist, z.star_count, z.stars,
                r.conf_tags(side), r.rsi, r.stoch.signal, r.stoch.dots,
-               r.n_bars - 1 - z.anchor_idx, entered)
+               r.n_bars - 1 - z.anchor_idx, entered, r.structure)
 
 
 # ============================== SVG HELPERS ====================================
@@ -632,6 +634,7 @@ with left:
             "Stars": r.stars, "Confluence": r.conf, "RSI7": round(r.rsi, 1),
             "Stoch": f"{r.stoch_sig} {r.stoch_dots}".strip(),
             "ZoneAgeBars": r.zone_age, "EnteredToday": r.entered_today,
+            "Structure": r.structure,
         } for r in rows_sorted])
         st.download_button("Export CSV", export.to_csv(index=False),
                            file_name=f"whale_scan_{date.today().isoformat()}.csv",
@@ -643,10 +646,28 @@ with right:
     ratio = buys / len(rows) if rows else 0.5
     mood = ("Bullish ↑", GOLD) if ratio > 0.55 else \
         (("Bearish ↓", COOL) if ratio < 0.45 else ("Neutral →", "#C9C9D1"))
+    n_bull = sum(1 for r in rows if r.structure == "Bullish")
+    n_bear = sum(1 for r in rows if r.structure == "Bearish")
+    n_mixed = len(rows) - n_bull - n_bear
+    s_tot = max(1, len(rows))
+    s_bull_pct = n_bull / s_tot * 100
+    s_bear_pct = n_bear / s_tot * 100
     st.markdown(f"""<div class='panel'>
       <div class='panel-hd mut'>MARKET MOMENTUM</div>
       <div style='font-family:Rajdhani;font-size:1.4rem;font-weight:700;color:{mood[1]}'>{mood[0]}</div>
       <div class='mut' style='font-size:.72rem'>{buys}/{len(rows)} symbols on stochastic BUY</div>
+      <div style='height:1px;background:rgba(255,255,255,.07);margin:12px 0 10px'></div>
+      <div class='panel-hd mut' style='font-size:.72rem;margin-bottom:8px'>STRUCTURE</div>
+      <div style='display:flex;height:6px;border-radius:3px;overflow:hidden;
+                  background:#1D1D22'>
+        <div style='width:{s_bull_pct:.1f}%;background:{GOLD}'></div>
+        <div style='width:{s_bear_pct:.1f}%;background:{COOL}'></div>
+      </div>
+      <div class='mut' style='font-size:.7rem;margin-top:8px;line-height:1.7'>
+        <span style='color:{GOLD}'>▲ Bullish</span> {n_bull} ({s_bull_pct:.0f}%) ·
+        <span style='color:{COOL}'>▼ Bearish</span> {n_bear} ({s_bear_pct:.0f}%) ·
+        <span class='mut'>Mixed</span> {n_mixed}
+      </div>
     </div>""", unsafe_allow_html=True)
     st.write("")
 
@@ -685,7 +706,8 @@ with right:
           <div style='font-size:.72rem'>ZONE <span class='mut'>{fmt_px(tp.zone_bot)} – {fmt_px(tp.zone_top)}</span>
           &nbsp; STRENGTH <span class='stars'>{"★" * tp.stars}</span><span class='mut'>{"☆" * (5 - tp.stars)}</span><br>
           RSI(7) <span class='mut'>{tp.rsi:.1f}</span> &nbsp; STOCH
-          <span class='{ "dgreen" if tp.stoch_sig == "BUY" else "dred"}'>{tp.stoch_sig} {tp.stoch_dots}</span></div>
+          <span class='{ "dgreen" if tp.stoch_sig == "BUY" else "dred"}'>{tp.stoch_sig} {tp.stoch_dots}</span>
+          &nbsp;·&nbsp; STRUCTURE <span class='{ "dgreen" if tp.structure == "Bullish" else "dred" if tp.structure == "Bearish" else "mut"}'>{tp.structure.upper()}</span></div>
         </div>""", unsafe_allow_html=True)
         st.write("")
 

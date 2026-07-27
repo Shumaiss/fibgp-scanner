@@ -11,7 +11,7 @@ the v11.5.3 base:
   • Leg extension: a found pivot pair extends forward through newer pivots
     to the full swing extreme (stops when the structure breaks) — stair-step
     trends form one full-structure leg
-  • Resistance targets R1-R4 (1.27/1.618/2.618/4.236 of the resistance leg)
+  • Market structure (HH/HL/LH/LL) — bullish / bearish / mixed state
   • Stochastic health score is frozen at the cross (marker formula:
     extreme zone, momentum, K-velocity); live score and ⚠ near-cross
     warning removed. RSI(7) retained as scanner-side analytics. Execution model mirrors Pine exactly: the engine is a
@@ -31,7 +31,7 @@ Ported components:
                              FVG-in-zone (3-candle, ≥50% unfilled, lookback 50)
   • Indicators             — RSI(7) Wilder, Stoch(5,3,3) + persistent BUY/SELL
                              signal, 3-point health score, near-cross warning
-  • Resistance targets     — R1-R4 at 1.27/1.618/2.618/4.236 of the resistance leg
+  • Market structure       — HH/HL/LH/LL tags from the same 5/1 pivots
 
 Bar "time" is represented by integer bar index (data is daily & monotonic, so
 index comparisons are equivalent to Pine's ms-timestamp comparisons).
@@ -56,7 +56,6 @@ MAX_PIVOTS = 80
 FVG_LOOKBACK = 50
 STALE_CAP = 480          # f_supStale / f_resStale search cap
 MIN_LEG_ATR = 2.5        # min leg span in ATRs to qualify as a zone
-TARGET_MULTS = (1.27, 1.618, 2.618, 4.236)   # R1-R4 resistance extensions
 
 RSI_LEN = 7
 STOCH_K = 5
@@ -233,7 +232,9 @@ class EngineResult:
     sup_fvg: bool = False
     res_ema_tag: str = ""
     res_fvg: bool = False
-    upside_targets: list = field(default_factory=list)   # [(level, price), ...]
+    struct_hi: str = ""       # last swing-high tag: HH / LH / H
+    struct_lo: str = ""       # last swing-low tag:  HL / LL / L
+    structure: str = "—"      # Bullish / Bearish / Mixed / —
     entered_sup_today: bool = False
     entered_res_today: bool = False
     n_bars: int = 0
@@ -653,16 +654,32 @@ class FibGPEngine:
             if self.use_fvg_conf:
                 res_fvg = self._fvg_in_zone(high, low, last, resistance.top, resistance.bot)
 
-        # ---- resistance targets R1-R4 (extensions of the resistance leg) ----
-        upside_targets = []
-        if resistance is not None and not math.isnan(resistance.leg_lo) \
-                and not math.isnan(resistance.leg_hi):
-            leg_rng = resistance.leg_hi - resistance.leg_lo
-            if leg_rng > 0:
-                for idx, mult in enumerate(TARGET_MULTS, start=1):
-                    px = resistance.leg_lo + mult * leg_rng
-                    if px > resistance.top:      # only levels above the zone
-                        upside_targets.append((f"R{idx}", float(px)))
+        # ---- market structure (HH/HL/LH/LL) ----
+        # Derived from the confirmed pivot registry, not raw detections: the
+        # registry already collapses same-side repeats (a two-bar plateau fires
+        # ta.pivothigh twice) into one swing, so tags compare distinct swings.
+        struct_hi = ""
+        struct_lo = ""
+        prev_hi = math.nan
+        prev_lo = math.nan
+        for _v, _k in zip(s_val, s_kind):
+            if _k == 1:
+                struct_hi = ("H" if math.isnan(prev_hi)
+                             else "HH" if _v > prev_hi else "LH")
+                prev_hi = _v
+            else:
+                struct_lo = ("L" if math.isnan(prev_lo)
+                             else "HL" if _v > prev_lo else "LL")
+                prev_lo = _v
+
+        if struct_hi == "HH" and struct_lo == "HL":
+            structure = "Bullish"
+        elif struct_hi == "LH" and struct_lo == "LL":
+            structure = "Bearish"
+        elif struct_hi or struct_lo:
+            structure = "Mixed"
+        else:
+            structure = "—"
 
         # ---- stochastic final state (Trader Pro: score frozen at cross,
         #      no live score, no near-cross warning) ----
@@ -682,7 +699,9 @@ class FibGPEngine:
             sup_fvg=sup_fvg,
             res_ema_tag=res_ema_tag,
             res_fvg=res_fvg,
-            upside_targets=upside_targets,
+            struct_hi=struct_hi,
+            struct_lo=struct_lo,
+            structure=structure,
             entered_sup_today=entered_sup_today,
             entered_res_today=entered_res_today,
             n_bars=n,
