@@ -104,8 +104,6 @@ table.scan tr:last-child td {{ border-bottom:none; }}
 .tick {{ color:#FFFFFF; font-weight:800; letter-spacing:.02em;
   text-decoration:none; }}
 a.tick:hover {{ color:{WHITE}; text-decoration:underline; text-underline-offset:3px; }}
-a.sym {{ text-decoration:none; }}
-a.sym:hover {{ text-decoration:underline; text-underline-offset:4px; }}
 .goto {{ opacity:0; font-size:.7em; margin-left:3px; transition:opacity .12s; }}
 a:hover .goto {{ opacity:.85; }}
 .badge {{ display:inline-block; padding:2px 9px; border-radius:5px; font-size:.6rem;
@@ -126,17 +124,8 @@ a:hover .goto {{ opacity:.85; }}
 .mut {{ color:#8B8B96; }}
 .dgreen {{ color:{GREEN}; }} .dred {{ color:{RED_C}; }} .damber {{ color:#9A9AA3; }}
 
-.legend {{ font-size:.7rem; line-height:2.0; }}
-.dot {{ display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:8px; }}
 
-.toppick {{ border:1px solid rgba(255,255,255,.20) !important;
-  box-shadow:0 10px 30px rgba(0,0,0,.35), inset 0 0 50px rgba(255,255,255,.03); }}
-.toppick .sym, .toppick a.sym {{ font-family:'Rajdhani',sans-serif; font-size:2.0rem;
-  font-weight:700; color:{WHITE}; letter-spacing:.03em; }}
-.toppick .px {{ font-family:'Rajdhani',sans-serif; font-size:1.7rem; font-weight:700; }}
 
-.dist-track {{ height:3px; background:#1D1D22; border-radius:2px; margin-top:6px; }}
-.dist-fill {{ height:3px; border-radius:2px; }}
 
 .stButton>button {{ border:1px solid rgba(255,255,255,.18); background:transparent;
   color:{TXT}; border-radius:9px; transition:all .12s; }}
@@ -564,7 +553,7 @@ if MIN_VOL > 0:
     view = [r for r in view if _notional(r.symbol) >= MIN_VOL]
 
 # ============================== MAIN GRID ======================================
-left, right = st.columns([2.35, 1.0])
+left = st.container()          # boards span the full width
 
 with left:
     npages = max(1, math.ceil(len(view) / PAGE_SIZE))
@@ -632,51 +621,6 @@ with left:
         st.download_button("Export CSV", export.to_csv(index=False),
                            file_name=f"whale_scan_{date.today().isoformat()}.csv",
                            mime="text/csv")
-
-with right:
-    # ---- market momentum ----
-    buys = sum(1 for r in rows if r.stoch_sig == "BUY")
-    ratio = buys / len(rows) if rows else 0.5
-    mood = ("Bullish ↑", GREEN) if ratio > 0.55 else \
-        (("Bearish ↓", RED_C) if ratio < 0.45 else ("Neutral →", "#C9C9D1"))
-    st.markdown(f"""<div class='panel'>
-      <div class='panel-hd mut'>MARKET MOMENTUM</div>
-      <div style='font-family:Rajdhani;font-size:1.4rem;font-weight:700;color:{mood[1]}'>{mood[0]}</div>
-      <div class='mut' style='font-size:.72rem'>{buys}/{len(rows)} symbols on stochastic BUY</div>
-    </div>""", unsafe_allow_html=True)
-    st.write("")
-
-    # ---- top pick ----
-    actionable = [r for r in rows_sorted if r.status != "NO_ZONE" and r.dist < math.inf]
-    if actionable:
-        tp = actionable[0]
-        df = st.session_state.ohlc_cache.get(
-            (tp.symbol, (st.session_state.get("scan_market", "psx"),
-                         st.session_state.get("scan_tf", "1d"),
-                         st.session_state.get("scan_start", ""))))
-        spark = sparkline(df["Close"].to_numpy(), w=236, h=64) if df is not None else ""
-        side_lbl = "support" if tp.side == "sup" else "resistance"
-        conf = f" · {tp.conf}" if tp.conf else ""
-        st.markdown(f"""<div class='panel toppick'>
-          <div class='panel-hd'><span class='damber'>★</span> TOP PICK</div>
-          <a class='sym' href='{tv_link(tp.symbol)}' target='_blank' rel='noopener'>{disp_symbol(tp.symbol)}<span class='goto'>↗</span></a>
-          <div class='mut' style='font-size:.72rem'>{"in" if tp.dist == 0 else f"{tp.dist:.2f}% from"} {side_lbl} zone{conf}</div>
-          <div class='px'>{fmt_px(tp.close)} <span class='mut' style='font-size:.8rem'>{"PKR" if st.session_state.get("scan_market","psx")=="psx" else "USDT"}</span></div>
-          <div style='margin:6px 0'>{spark}</div>
-          <div style='font-size:.72rem'>ZONE <span class='mut'>{fmt_px(tp.zone_bot)} – {fmt_px(tp.zone_top)}</span>
-          &nbsp; STRENGTH <span class='stars'>{"★" * tp.stars}</span><span class='mut'>{"☆" * (5 - tp.stars)}</span><br>
-          RSI(7) <span class='mut'>{tp.rsi:.1f}</span> &nbsp; STOCH
-          <span class='{ "dgreen" if tp.stoch_sig == "BUY" else "dred"}'>{tp.stoch_sig} {tp.stoch_dots}</span>
-          &nbsp;·&nbsp; STRUCTURE <span class='{ "dgreen" if tp.structure == "Bullish" else "dred" if tp.structure == "Bearish" else "mut"}'>{tp.structure.upper()}</span></div>
-        </div>""", unsafe_allow_html=True)
-        st.write("")
-
-    st.markdown(f"""<div class='panel'>
-      <div class='panel-hd mut'>MARKET INSIGHT</div>
-      <div style='font-size:.74rem;line-height:1.7' class='mut'>
-      Smart money flows where price meets precision.
-      Track the zones. Trade with the whales.</div>
-    </div>""", unsafe_allow_html=True)
 
 # ============================== FOOTER =========================================
 _tf_name = "Weekly" if st.session_state.get("scan_tf") == "1w" else "Daily"
