@@ -645,10 +645,20 @@ if failed:
         st.error("Data sources are unreachable right now — please try again in a "
                  "few minutes. (Details logged for the operator.)")
     elif len(failed) > max(3, len(results) // 4):
-        st.warning(f"{len(failed)} symbols couldn't be fetched this scan — "
-                   f"these are usually contracts without enough price history. "
-                   f"Everything else scanned normally. "
-                   f"(Details logged for the operator.)")
+        # Reason differs per market — don't guess one explanation for all.
+        if market == "stocks":
+            why = ("most are recently listed contracts without enough price "
+                   "history yet; they join the boards as history builds.")
+        elif market == "psx":
+            why = ("the data source stopped responding partway through the "
+                   "scan. Fetched symbols are cached — rescan in a few "
+                   "minutes to fill the gaps.")
+        else:
+            why = ("the data source limited or dropped the remaining requests. "
+                   "Fetched symbols are cached — rescan in a few minutes to "
+                   "fill the gaps.")
+        st.warning(f"{len(results)} of {len(results) + len(failed)} symbols "
+                   f"scanned — {why} (Details logged for the operator.)")
 with st.expander(f"Skipped symbols ({len(failed)})" if failed else "Skipped symbols (0)"):
     if failed:
         st.markdown(f"<span class='mut' style='font-size:.72rem'>{', '.join(failed)}</span>",
