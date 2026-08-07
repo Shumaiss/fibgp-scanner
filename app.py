@@ -242,7 +242,7 @@ def tv_link(symbol: str) -> str:
     PSX tickers the PSX: prefix. Weekly scans open weekly charts."""
     market = st.session_state.get("scan_market", "psx")
     tf = st.session_state.get("scan_tf", "1d")
-    iv = "1W" if tf == "1w" else "1D"
+    iv = "1W" if tf == "1w" else "240" if tf == "4h" else "1D"
     if market == "psx":
         tv_sym = f"PSX:{symbol}"
     elif market == "fx":
@@ -294,7 +294,7 @@ def fmt_px(v: float) -> str:
 # ============================== SIDEBAR ========================================
 with st.sidebar:
     st.markdown(f"<div class='hd-title'><span style='color:{WHITE}'>◆</span> WHALE <span class='m'>SCANNER</span></div>"
-                f"<div class='hd-sub'>KEY LEVELS · DAILY / WEEKLY</div>",
+                f"<div class='hd-sub'>KEY LEVELS · 4H / DAILY / WEEKLY</div>",
                 unsafe_allow_html=True)
     st.write("")
     universe_choice = st.radio("Universe",
@@ -331,15 +331,21 @@ with st.sidebar:
         market = "fx"         # real forex, commodities, indices, shares
         symbols, _ = list_symbols_fx(fx_group)
 
-    timeframe = st.radio("Timeframe", ["Daily", "Weekly"], horizontal=True)
-    tf = "1w" if timeframe == "Weekly" else "1d"
+    timeframe = st.radio("Timeframe", ["4H", "Daily", "Weekly"],
+                         index=1, horizontal=True)
+    tf = {"4H": "4h", "Weekly": "1w"}.get(timeframe, "1d")
     near_pct = st.slider("Near threshold (%)", 0.5, 5.0, 2.0, 0.25)
     min_vol_lbl = st.selectbox("Min volume (last bar)",
                                ["Off", "100K", "1M", "10M", "100M"], index=0,
                                help="Filters thin pairs by last-bar traded value.")
     MIN_VOL = {"Off": 0, "100K": 1e5, "1M": 1e6, "10M": 1e7, "100M": 1e8}[min_vol_lbl]
-    _min_m = 15 if tf == "1w" else 8
-    lookback_m = st.slider("History (months)", _min_m, 24, max(18, _min_m))
+    if tf == "1w":
+        _min_m, _def_m = 15, 18
+    elif tf == "4h":
+        _min_m, _def_m = 2, 6        # ~6 months of 4H is already ~1,000 bars
+    else:
+        _min_m, _def_m = 8, 18
+    lookback_m = st.slider("History (months)", _min_m, 24, _def_m)
 
     with st.expander("Engine parameters"):
         piv_l = st.number_input("Pivot left bars", 1, 20, 5)
@@ -370,6 +376,8 @@ with st.sidebar:
     ttl_lbl = ("EOD · cached" if market == "psx"
                else "market hours · 15m cache" if market in ("stocks", "fx")
                else "24/7 · 15m cache")
+    if tf == "4h" and market != "psx":
+        ttl_lbl = "intraday · 1h cache"
     st.caption(f"{n_lbl} · {tf_lbl} · {ttl_lbl}")
 
 
@@ -405,7 +413,8 @@ def run_full_scan(syms, start, engine, thr, market, tf):
         if market == "fx":
             return fetch_daily_fx(s, start, tf)   # provider serves weekly natively
         # crypto: native weekly candles; pull deeper history for weekly depth
-        c_start = start if tf == "1d" else date.today() - relativedelta(months=60)
+        c_start = (date.today() - relativedelta(months=60)
+                   if tf == "1w" else start)
         return fetch_daily_crypto(s, c_start, market, tf)
 
     if market == "fx":
@@ -449,6 +458,11 @@ def run_full_scan(syms, start, engine, thr, market, tf):
     prog.empty()
     return rows, results, failed
 
+
+if run_scan and market == "psx" and tf == "4h":
+    st.warning("4H isn't available for PSX — that data source provides "
+               "end-of-day candles only. Use Daily or Weekly.")
+    run_scan = False
 
 if run_scan:
     start = date.today() - relativedelta(months=int(lookback_m))
@@ -623,7 +637,8 @@ with left:
                            mime="text/csv")
 
 # ============================== FOOTER =========================================
-_tf_name = "Weekly" if st.session_state.get("scan_tf") == "1w" else "Daily"
+_tf_name = {"1w": "Weekly", "4h": "4H"}.get(
+    st.session_state.get("scan_tf"), "Daily")
 _meta = repo_meta() if st.session_state.get("scan_market", "psx") == "psx" else None
 _fresh = f" · PSX data as of {_meta['last_trading_date']}" if _meta else ""
 foot = (f"Universe: {universe_choice} · Timeframe: {_tf_name} · "

@@ -237,8 +237,10 @@ def _perp_klines(symbol: str, start: date,
                  interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
     """Futures candles — contract API: BTC_USDT symbols, columnar payload.
     Explicit start/end so we always get the full window (default count is small)."""
+    _intraday = interval not in ("1d", "1w")
     c_sym = symbol[:-4] + "_USDT" if symbol.endswith("USDT") else symbol
-    iv = "Week1" if interval == "1w" else "Day1"
+    iv = ("Week1" if interval == "1w"
+          else "Hour4" if interval == "4h" else "Day1")
     t_start = int(datetime(start.year, start.month, start.day,
                            tzinfo=timezone.utc).timestamp())
     t_end = int(time.time())
@@ -255,7 +257,11 @@ def _perp_klines(symbol: str, start: date,
                                     d["low"], d["close"],
                                     d.get("vol", [0] * len(d["time"]))):
             ts = datetime.fromtimestamp(int(t), tz=timezone.utc)
-            recs.append({"Date": pd.Timestamp(ts.date()),
+            # intraday bars must keep their time-of-day or every bar in a day
+            # collapses into one row on the de-duplicate step
+            stamp = (pd.Timestamp(ts.replace(tzinfo=None)) if _intraday
+                     else pd.Timestamp(ts.date()))
+            recs.append({"Date": stamp,
                          "Open": float(o), "High": float(h),
                          "Low": float(l), "Close": float(c),
                          "Volume": float(v)})
@@ -268,7 +274,8 @@ def _perp_klines(symbol: str, start: date,
 def _spot_klines(symbol: str, start: date,
                  interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
     """Spot candles fallback — v3 API rows [openTime, o, h, l, c, vol, ...]."""
-    iv = "1W" if interval == "1w" else interval
+    _intraday = interval not in ("1d", "1w")
+    iv = "1W" if interval == "1w" else interval   # spot uses 4h / 1d as-is
     data, err = _get_json(SPOT_HOST + "/api/v3/klines",
                           {"symbol": symbol, "interval": iv, "limit": 1000})
     if data is None:
@@ -279,7 +286,9 @@ def _spot_klines(symbol: str, start: date,
     for row in data:
         try:
             d = datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc)
-            recs.append({"Date": pd.Timestamp(d.date()),
+            stamp = (pd.Timestamp(d.replace(tzinfo=None)) if _intraday
+                     else pd.Timestamp(d.date()))
+            recs.append({"Date": stamp,
                          "Open": float(row[1]), "High": float(row[2]),
                          "Low": float(row[3]), "Close": float(row[4]),
                          "Volume": float(row[5])})

@@ -55,7 +55,8 @@ import requests
 
 API_HOST = "https://api.twelvedata.com"
 CACHE_DIR = "/tmp/fibgp_cache"
-CANDLE_TTL = 6 * 3600          # these markets close daily; 6h cache is ample
+CANDLE_TTL = 6 * 3600          # daily/weekly: these markets close daily
+INTRADAY_TTL = 3600            # 4H: a new bar can land every four hours
 
 LAST_ERRORS: dict[str, str] = {}
 _local = threading.local()
@@ -229,6 +230,15 @@ def _breaker_report(ok: bool):
                 _thr["fails"] = 0
 
 
+def _api_interval(interval: str) -> str:
+    """Our timeframe code -> the provider's interval string."""
+    return {"1w": "1week", "4h": "4h"}.get(interval, "1day")
+
+
+def _ttl_for(interval: str) -> int:
+    return INTRADAY_TTL if interval not in ("1d", "1w") else CANDLE_TTL
+
+
 def _cache_path(display: str, interval: str) -> str:
     safe = display.replace("/", "_").replace(".", "-")
     return os.path.join(CACHE_DIR, f"fx_{interval}_{safe}.csv")
@@ -237,7 +247,7 @@ def _cache_path(display: str, interval: str) -> str:
 def _cache_read(display: str, interval: str) -> pd.DataFrame | None:
     p = _cache_path(display, interval)
     try:
-        if os.path.exists(p) and (time.time() - os.path.getmtime(p)) < CANDLE_TTL:
+        if os.path.exists(p) and (time.time() - os.path.getmtime(p)) < _ttl_for(interval):
             df = pd.read_csv(p, index_col=0, parse_dates=True)
             if {"Open", "High", "Low", "Close"}.issubset(df.columns) and len(df):
                 return df
@@ -259,7 +269,7 @@ def _rows_to_frame(values) -> pd.DataFrame | None:
     recs = []
     for v in values or []:
         try:
-            recs.append({"Date": pd.Timestamp(v["datetime"][:10]),
+            recs.append({"Date": pd.Timestamp(v["datetime"]),
                          "Open": float(v["open"]), "High": float(v["high"]),
                          "Low": float(v["low"]), "Close": float(v["close"]),
                          "Volume": float(v.get("volume") or 0)})
@@ -291,7 +301,7 @@ def prefetch_group(displays: list[str], interval: str = "1d") -> tuple[int, int]
         if not _spend_request(f"BATCH[{len(data_syms)}] {','.join(data_syms)}"):
             break
         params = {"symbol": ",".join(data_syms),
-                  "interval": "1week" if interval == "1w" else "1day",
+                  "interval": _api_interval(interval),
                   "outputsize": 5000, "order": "ASC",
                   "format": "JSON", "apikey": key}
 
@@ -415,7 +425,7 @@ def fetch_daily_fx(display: str, start: date,
                                 "have covered this symbol")
         return None
     params = {"symbol": data_sym,
-              "interval": "1week" if interval == "1w" else "1day",
+              "interval": _api_interval(interval),
               "outputsize": 5000, "order": "ASC",
               "format": "JSON", "apikey": key}
     _pace()
@@ -461,7 +471,7 @@ def fetch_daily_fx(display: str, start: date,
     recs = []
     for v in values:
         try:
-            recs.append({"Date": pd.Timestamp(v["datetime"][:10]),
+            recs.append({"Date": pd.Timestamp(v["datetime"]),
                          "Open": float(v["open"]), "High": float(v["high"]),
                          "Low": float(v["low"]), "Close": float(v["close"]),
                          "Volume": float(v.get("volume") or 0)})
