@@ -149,9 +149,24 @@ def test_market_structure():
           + ramp(175, 105, 14) + ramp(105, 130, 8))
     o, h, l, c = make_bars(mx, spread=0.4)
     res = FibGPEngine().run(o, h, l, c)
-    assert res.structure in ("Mixed", "Bullish", "Bearish")
+    assert res.structure in ("Ranging", "Bullish", "Bearish")
     print(f"  conflicting structure OK: {res.struct_hi}/{res.struct_lo} "
           f"-> {res.structure}")
+
+    # Trader Pro rule verbatim: only HH+HL and LH+LL are directional
+    for hi, lo, want in (("HH", "HL", "Bullish"), ("LH", "LL", "Bearish"),
+                         ("HH", "LL", "Ranging"), ("LH", "HL", "Ranging"),
+                         ("", "HL", "Ranging"), ("HH", "", "Ranging")):
+        if not hi or not lo:
+            got = "Ranging"
+        elif hi == "HH" and lo == "HL":
+            got = "Bullish"
+        elif hi == "LH" and lo == "LL":
+            got = "Bearish"
+        else:
+            got = "Ranging"
+        assert got == want, (hi, lo, got, want)
+    print("  trend rule matches the Trader Pro badge for all tag pairs")
 
     # no targets should exist anywhere on the result
     assert not hasattr(res, "upside_targets"), "targets should be removed"

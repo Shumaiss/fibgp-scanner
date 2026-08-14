@@ -256,14 +256,12 @@ def tv_link(symbol: str) -> str:
 
 
 def struct_cell(structure: str) -> str:
-    """Structure tag for the table: green bullish, red bearish, grey otherwise."""
+    """Trend badge for the table — same wording as the Trader Pro chart."""
     if structure == "Bullish":
         return "<span class='st-bull'>&#9650; BULLISH</span>"
     if structure == "Bearish":
         return "<span class='st-bear'>&#9660; BEARISH</span>"
-    if structure == "Mixed":
-        return "<span class='st-mix'>MIXED</span>"
-    return "<span class='st-mix'>&mdash;</span>"
+    return "<span class='st-mix'>RANGING</span>"
 
 
 def fmt_vol(v: float) -> str:
@@ -601,8 +599,8 @@ with left:
     st.markdown(f"""<div class='panel'>
       <table class='scan'>
        <tr><th>#</th><th>TICKER</th><th class='num'>PRICE</th><th class='num'>VOL</th>
-       <th class='num'>DISTANCE %</th><th>STATUS</th><th>STRUCTURE</th>
-       <th>STARS</th><th>TREND</th></tr>
+       <th class='num'>DISTANCE %</th><th>STATUS</th><th>TREND</th>
+       <th>STARS</th><th>CHART</th></tr>
        {body if body else "<tr><td colspan='9' class='mut'>No rows match this filter.</td></tr>"}
       </table></div>""", unsafe_allow_html=True)
 
@@ -630,7 +628,7 @@ with left:
             "Stars": r.stars, "Confluence": r.conf, "RSI7": round(r.rsi, 1),
             "Stoch": f"{r.stoch_sig} {r.stoch_dots}".strip(),
             "ZoneAgeBars": r.zone_age, "EnteredToday": r.entered_today,
-            "Structure": r.structure,
+            "Trend": r.structure,
         } for r in rows_sorted])
         st.download_button("Export CSV", export.to_csv(index=False),
                            file_name=f"whale_scan_{date.today().isoformat()}.csv",

@@ -11,7 +11,8 @@ the v11.5.3 base:
   • Leg extension: a found pivot pair extends forward through newer pivots
     to the full swing extreme (stops when the structure breaks) — stair-step
     trends form one full-structure leg
-  • Market structure (HH/HL/LH/LL) — bullish / bearish / mixed state
+  • Trend badge (HH/HL/LH/LL) — Bullish / Bearish / Ranging, matching
+    the Trader Pro chart badge exactly
   • Stochastic health score is frozen at the cross (marker formula:
     extreme zone, momentum, K-velocity); live score and ⚠ near-cross
     warning removed. RSI(7) retained as scanner-side analytics. Execution model mirrors Pine exactly: the engine is a
@@ -31,7 +32,7 @@ Ported components:
                              FVG-in-zone (3-candle, ≥50% unfilled, lookback 50)
   • Indicators             — RSI(7) Wilder, Stoch(5,3,3) + persistent BUY/SELL
                              signal, 3-point health score, near-cross warning
-  • Market structure       — HH/HL/LH/LL tags from the same 5/1 pivots
+  • Trend                  — HH/HL/LH/LL tags from the same 5/1 pivots
 
 Bar "time" is represented by integer bar index (data is daily & monotonic, so
 index comparisons are equivalent to Pine's ms-timestamp comparisons).
@@ -438,6 +439,17 @@ class FibGPEngine:
         prev_in_sup = False
         prev_in_res = False
 
+        # Trend / market structure — Pine-faithful sequential tagging so the
+        # scanner agrees with the Trader Pro trend badge. One guard: the same
+        # swing confirmed on two adjacent bars at an identical price is ONE
+        # swing (ta.pivothigh fires twice on a flat top), not a lower high.
+        last_swing_hi = math.nan
+        last_swing_lo = math.nan
+        last_hi_anc = None
+        last_lo_anc = None
+        struct_hi = ""
+        struct_lo = ""
+
         for i in range(n):
             c = close[i]
 
@@ -448,8 +460,22 @@ class FibGPEngine:
 
             if ph is not None:
                 self._add_pivot(s_val, s_time, s_kind, ph, anc_t, 1)
+                dup = (last_hi_anc is not None and ph == last_swing_hi
+                       and anc_t - last_hi_anc <= 1)
+                if not dup:
+                    struct_hi = ("H" if math.isnan(last_swing_hi)
+                                 else "HH" if ph > last_swing_hi else "LH")
+                    last_swing_hi = ph
+                last_hi_anc = anc_t
             if pl is not None:
                 self._add_pivot(s_val, s_time, s_kind, pl, anc_t, -1)
+                dup = (last_lo_anc is not None and pl == last_swing_lo
+                       and anc_t - last_lo_anc <= 1)
+                if not dup:
+                    struct_lo = ("L" if math.isnan(last_swing_lo)
+                                 else "HL" if pl > last_swing_lo else "LL")
+                    last_swing_lo = pl
+                last_lo_anc = anc_t
 
             # ===== 2. running high/low (live endpoint tracking)
             if pl is not None:
@@ -654,32 +680,16 @@ class FibGPEngine:
             if self.use_fvg_conf:
                 res_fvg = self._fvg_in_zone(high, low, last, resistance.top, resistance.bot)
 
-        # ---- market structure (HH/HL/LH/LL) ----
-        # Derived from the confirmed pivot registry, not raw detections: the
-        # registry already collapses same-side repeats (a two-bar plateau fires
-        # ta.pivothigh twice) into one swing, so tags compare distinct swings.
-        struct_hi = ""
-        struct_lo = ""
-        prev_hi = math.nan
-        prev_lo = math.nan
-        for _v, _k in zip(s_val, s_kind):
-            if _k == 1:
-                struct_hi = ("H" if math.isnan(prev_hi)
-                             else "HH" if _v > prev_hi else "LH")
-                prev_hi = _v
-            else:
-                struct_lo = ("L" if math.isnan(prev_lo)
-                             else "HL" if _v > prev_lo else "LL")
-                prev_lo = _v
-
-        if struct_hi == "HH" and struct_lo == "HL":
+        # ---- trend badge (Trader Pro rule, verbatim) ----
+        #   HH + HL -> BULLISH,  LH + LL -> BEARISH,  anything else -> RANGING
+        if not struct_hi or not struct_lo:
+            structure = "Ranging"
+        elif struct_hi == "HH" and struct_lo == "HL":
             structure = "Bullish"
         elif struct_hi == "LH" and struct_lo == "LL":
             structure = "Bearish"
-        elif struct_hi or struct_lo:
-            structure = "Mixed"
         else:
-            structure = "—"
+            structure = "Ranging"
 
         # ---- stochastic final state (Trader Pro: score frozen at cross,
         #      no live score, no near-cross warning) ----
