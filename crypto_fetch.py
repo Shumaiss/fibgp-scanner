@@ -237,10 +237,9 @@ def _perp_klines(symbol: str, start: date,
                  interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
     """Futures candles — contract API: BTC_USDT symbols, columnar payload.
     Explicit start/end so we always get the full window (default count is small)."""
-    _intraday = interval not in ("1d", "1w")
+    _intraday = interval not in ("1d", "1w", "1mo")
     c_sym = symbol[:-4] + "_USDT" if symbol.endswith("USDT") else symbol
-    iv = ("Week1" if interval == "1w"
-          else "Hour4" if interval == "4h" else "Day1")
+    iv = {"1w": "Week1", "1mo": "Month1", "4h": "Hour4"}.get(interval, "Day1")
     t_start = int(datetime(start.year, start.month, start.day,
                            tzinfo=timezone.utc).timestamp())
     t_end = int(time.time())
@@ -274,8 +273,8 @@ def _perp_klines(symbol: str, start: date,
 def _spot_klines(symbol: str, start: date,
                  interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
     """Spot candles fallback — v3 API rows [openTime, o, h, l, c, vol, ...]."""
-    _intraday = interval not in ("1d", "1w")
-    iv = "1W" if interval == "1w" else interval   # spot uses 4h / 1d as-is
+    _intraday = interval not in ("1d", "1w", "1mo")
+    iv = {"1w": "1W", "1mo": "1M"}.get(interval, interval)  # 4h / 1d pass through
     data, err = _get_json(SPOT_HOST + "/api/v3/klines",
                           {"symbol": symbol, "interval": iv, "limit": 1000})
     if data is None:

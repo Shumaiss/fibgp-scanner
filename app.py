@@ -242,7 +242,7 @@ def tv_link(symbol: str) -> str:
     PSX tickers the PSX: prefix. Weekly scans open weekly charts."""
     market = st.session_state.get("scan_market", "psx")
     tf = st.session_state.get("scan_tf", "1d")
-    iv = "1W" if tf == "1w" else "240" if tf == "4h" else "1D"
+    iv = {"1w": "1W", "1mo": "1M", "4h": "240"}.get(tf, "1D")
     if market == "psx":
         tv_sym = f"PSX:{symbol}"
     elif market == "fx":
@@ -292,7 +292,7 @@ def fmt_px(v: float) -> str:
 # ============================== SIDEBAR ========================================
 with st.sidebar:
     st.markdown(f"<div class='hd-title'><span style='color:{WHITE}'>◆</span> WHALE <span class='m'>SCANNER</span></div>"
-                f"<div class='hd-sub'>KEY LEVELS · 4H / DAILY / WEEKLY</div>",
+                f"<div class='hd-sub'>KEY LEVELS · 4H / DAILY / WEEKLY / MONTHLY</div>",
                 unsafe_allow_html=True)
     st.write("")
     universe_choice = st.radio("Universe",
@@ -329,21 +329,24 @@ with st.sidebar:
         market = "fx"         # real forex, commodities, indices, shares
         symbols, _ = list_symbols_fx(fx_group)
 
-    timeframe = st.radio("Timeframe", ["4H", "Daily", "Weekly"],
+    timeframe = st.radio("Timeframe", ["4H", "Daily", "Weekly", "1M"],
                          index=1, horizontal=True)
-    tf = {"4H": "4h", "Weekly": "1w"}.get(timeframe, "1d")
+    tf = {"4H": "4h", "Weekly": "1w", "1M": "1mo"}.get(timeframe, "1d")
     near_pct = st.slider("Near threshold (%)", 0.5, 5.0, 2.0, 0.25)
     min_vol_lbl = st.selectbox("Min volume (last bar)",
                                ["Off", "100K", "1M", "10M", "100M"], index=0,
                                help="Filters thin pairs by last-bar traded value.")
     MIN_VOL = {"Off": 0, "100K": 1e5, "1M": 1e6, "10M": 1e7, "100M": 1e8}[min_vol_lbl]
-    if tf == "1w":
-        _min_m, _def_m = 15, 18
+    if tf == "1mo":
+        # one bar per month: 60 months = 60 bars, comfortably above the guard
+        _min_m, _def_m, _max_m = 36, 60, 120
+    elif tf == "1w":
+        _min_m, _def_m, _max_m = 15, 18, 24
     elif tf == "4h":
-        _min_m, _def_m = 2, 6        # ~6 months of 4H is already ~1,000 bars
+        _min_m, _def_m, _max_m = 2, 6, 24   # ~6 months of 4H is already ~1,000 bars
     else:
-        _min_m, _def_m = 8, 18
-    lookback_m = st.slider("History (months)", _min_m, 24, _def_m)
+        _min_m, _def_m, _max_m = 8, 18, 24
+    lookback_m = st.slider("History (months)", _min_m, _max_m, _def_m)
 
     with st.expander("Engine parameters"):
         piv_l = st.number_input("Pivot left bars", 1, 20, 5)
@@ -399,6 +402,17 @@ def to_weekly(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_index()
 
 
+def to_monthly(df: pd.DataFrame) -> pd.DataFrame:
+    """Daily -> monthly OHLC, keyed to the first of each month (chart
+    convention); the current forming month is included."""
+    mk = df.index.to_period("M").to_timestamp()
+    g = df.groupby(mk)
+    out = pd.DataFrame({"Open": g["Open"].first(), "High": g["High"].max(),
+                        "Low": g["Low"].min(), "Close": g["Close"].last(),
+                        "Volume": g["Volume"].sum()})
+    return out.sort_index()
+
+
 def run_full_scan(syms, start, engine, thr, market, tf):
     rows, results, failed = [], {}, []
     prog = st.progress(0.0, text="Fetching market data…")
@@ -407,12 +421,18 @@ def run_full_scan(syms, start, engine, thr, market, tf):
     def _fetch(s):
         if market == "psx":
             df = fetch_daily(s, start)
-            return to_weekly(df) if (tf == "1w" and df is not None) else df
+            if df is None:
+                return df
+            if tf == "1w":
+                return to_weekly(df)
+            if tf == "1mo":
+                return to_monthly(df)
+            return df
         if market == "fx":
             return fetch_daily_fx(s, start, tf)   # provider serves weekly natively
         # crypto: native weekly candles; pull deeper history for weekly depth
         c_start = (date.today() - relativedelta(months=60)
-                   if tf == "1w" else start)
+                   if tf in ("1w", "1mo") else start)
         return fetch_daily_crypto(s, c_start, market, tf)
 
     if market == "fx":
@@ -442,7 +462,9 @@ def run_full_scan(syms, start, engine, thr, market, tf):
     for i, s in enumerate(syms):
         df = st.session_state.ohlc_cache.get((s, key))
         prog.progress(0.85 + 0.15 * (i + 1) / len(syms), text=f"Engine… {s}")
-        min_bars = 35 if market == "stocks" else 60   # young tokenized listings; fx/crypto/psx have depth
+        min_bars = (30 if tf == "1mo"                 # 30 monthly bars = 2.5 years
+                    else 35 if market == "stocks"     # young tokenized listings
+                    else 60)
         if df is None or len(df) < min_bars:
             failed.append(s)
             continue
@@ -635,7 +657,7 @@ with left:
                            mime="text/csv")
 
 # ============================== FOOTER =========================================
-_tf_name = {"1w": "Weekly", "4h": "4H"}.get(
+_tf_name = {"1w": "Weekly", "4h": "4H", "1mo": "Monthly"}.get(
     st.session_state.get("scan_tf"), "Daily")
 _meta = repo_meta() if st.session_state.get("scan_market", "psx") == "psx" else None
 _fresh = f" · PSX data as of {_meta['last_trading_date']}" if _meta else ""

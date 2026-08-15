@@ -232,11 +232,11 @@ def _breaker_report(ok: bool):
 
 def _api_interval(interval: str) -> str:
     """Our timeframe code -> the provider's interval string."""
-    return {"1w": "1week", "4h": "4h"}.get(interval, "1day")
+    return {"1w": "1week", "1mo": "1month", "4h": "4h"}.get(interval, "1day")
 
 
 def _ttl_for(interval: str) -> int:
-    return INTRADAY_TTL if interval not in ("1d", "1w") else CANDLE_TTL
+    return INTRADAY_TTL if interval not in ("1d", "1w", "1mo") else CANDLE_TTL
 
 
 def _cache_path(display: str, interval: str) -> str:
