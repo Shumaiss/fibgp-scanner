@@ -21,6 +21,7 @@ import pandas as pd
 import streamlit as st
 
 from fibgp_engine import FibGPEngine, EngineResult
+from ob_engine import OrderBlockEngine
 from psx_fetch import (fetch_daily, LAST_ERRORS, CACHE_DIR,
                        repo_symbols, repo_meta, STALE_NOTES)
 from forex_fetch import (fetch_daily_fx, list_symbols_fx, tv_symbol_fx,
@@ -295,6 +296,12 @@ with st.sidebar:
                 f"<div class='hd-sub'>KEY LEVELS · 4H / DAILY / WEEKLY / MONTHLY</div>",
                 unsafe_allow_html=True)
     st.write("")
+    strategy = st.radio("Strategy", ["Zones", "Order Blocks"],
+                        help="Zones: golden-pocket support and resistance. "
+                             "Order Blocks: the last opposing candle before a "
+                             "displacement that breaks structure, tracked until "
+                             "price trades through it.")
+    st.write("")
     universe_choice = st.radio("Universe",
                                ["All PSX", "KSE-100", "Quick 25",
                                 "Crypto", "Stocks & Commodities",
@@ -348,13 +355,27 @@ with st.sidebar:
         _min_m, _def_m, _max_m = 8, 18, 24
     lookback_m = st.slider("History (months)", _min_m, _max_m, _def_m)
 
+    piv_l = piv_r = 5
+    use_live = use_ema = use_fvg = True
+    fvg_lb = 50
+    ob_bos = 5
+    ob_look = 8
+    ob_max = 6
+    ob_atr = 0.25
     with st.expander("Engine parameters"):
-        piv_l = st.number_input("Pivot left bars", 1, 20, 5)
-        piv_r = st.number_input("Pivot right bars", 1, 20, 3)
-        use_live = st.checkbox("Use live (unconfirmed) endpoint", True)
-        use_ema = st.checkbox("EMA confluence", True)
-        use_fvg = st.checkbox("FVG confluence", True)
-        fvg_lb = st.number_input("FVG lookback (bars)", 10, 200, 50)
+        if strategy == "Order Blocks":
+            ob_bos = st.number_input("Structure pivot length", 2, 20, 5)
+            ob_look = st.number_input("Opposing-candle lookback", 3, 20, 8)
+            ob_max = st.number_input("Blocks kept per side", 1, 12, 6)
+            ob_atr = st.number_input("Min block size (ATR multiple)",
+                                     0.05, 2.0, 0.25, step=0.05)
+        else:
+            piv_l = st.number_input("Pivot left bars", 1, 20, 5)
+            piv_r = st.number_input("Pivot right bars", 1, 20, 3)
+            use_live = st.checkbox("Use live (unconfirmed) endpoint", True)
+            use_ema = st.checkbox("EMA confluence", True)
+            use_fvg = st.checkbox("FVG confluence", True)
+            fvg_lb = st.number_input("FVG lookback (bars)", 10, 200, 50)
 
     run_scan = st.button("SCAN", type="primary", use_container_width=True)
 
@@ -492,9 +513,13 @@ if run_scan:
         if "fallback" in src_note:
             st.warning(f"Using built-in majors list ({len(symbols)} pairs) — "
                        f"full listing temporarily unavailable.")
-    engine = FibGPEngine(piv_left=int(piv_l), piv_right=int(piv_r),
-                         use_live=use_live, fvg_lookback=int(fvg_lb),
-                         use_ema_conf=use_ema, use_fvg_conf=use_fvg)
+    if strategy == "Order Blocks":
+        engine = OrderBlockEngine(bos_len=int(ob_bos), ob_look=int(ob_look),
+                                  ob_max=int(ob_max), min_atr_x=float(ob_atr))
+    else:
+        engine = FibGPEngine(piv_left=int(piv_l), piv_right=int(piv_r),
+                             use_live=use_live, fvg_lookback=int(fvg_lb),
+                             use_ema_conf=use_ema, use_fvg_conf=use_fvg)
     rows, results, failed = run_full_scan(symbols, start, engine, near_pct,
                                           market, tf)
     st.session_state.scan = (rows, results, failed,
@@ -503,6 +528,7 @@ if run_scan:
     st.session_state.scan_start = start.isoformat()
     st.session_state.scan_market = market
     st.session_state.scan_tf = tf
+    st.session_state.scan_strategy = strategy
 
 
 # ============================== HEADER =========================================
@@ -661,7 +687,9 @@ _tf_name = {"1w": "Weekly", "4h": "4H", "1mo": "Monthly"}.get(
     st.session_state.get("scan_tf"), "Daily")
 _meta = repo_meta() if st.session_state.get("scan_market", "psx") == "psx" else None
 _fresh = f" · PSX data as of {_meta['last_trading_date']}" if _meta else ""
-foot = (f"Universe: {universe_choice} · Timeframe: {_tf_name} · "
+_strat = st.session_state.get("scan_strategy", "Zones")
+foot = (f"Strategy: {_strat} · Universe: {universe_choice} · "
+        f"Timeframe: {_tf_name} · "
         f"Data: EOD (cached){_fresh} · Scanned {len(results)}/{tot}")
 if failed:
     foot += f" · skipped {len(failed)}"
