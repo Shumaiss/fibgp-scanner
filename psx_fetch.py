@@ -33,7 +33,7 @@ from __future__ import annotations
 import re
 import threading
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -50,14 +50,15 @@ P1_DELAY = 0.30               # primary-provider pacing (per symbol request)
 # ---- circuit breakers: stop hammering a source that is refusing us ----
 _BREAK_AFTER = 5              # consecutive full-symbol failures to trip
 _COOLDOWN = 180.0             # seconds a tripped source stays closed
-_state = {"p1_fails": 0, "p1_down_until": 0.0,
+_state = {"p0_fails": 0, "p0_down_until": 0.0,
+          "p1_fails": 0, "p1_down_until": 0.0,
           "p2_fails": 0, "p2_down_until": 0.0,
           "p3_fails": 0, "p3_down_until": 0.0}
 _state_lock = threading.Lock()
 
 
 # last genuine failure per route, so a cooling-down message never hides the cause
-_LAST_REAL: dict[str, str] = {"p1": "", "p2": "", "p3": ""}
+_LAST_REAL: dict[str, str] = {"p0": "", "p1": "", "p2": "", "p3": ""}
 
 
 def _cooling_msg(key: str) -> str:
@@ -113,6 +114,82 @@ SCS_PATH = "/stockscreening/SS_HistoricalCharts.aspx/chart"
 SCS_REF_PATH = "/stockscreening/SS_HistoricalCharts.aspx"
 
 _MS_DATE = re.compile(r"/Date\((\-?\d+)")
+
+
+# ============================ P0: CHART API (PRIMARY) =========================
+# Global chart API, PSX listings under the ".KA" suffix. Probed live from the
+# deployed app: reachable, returns full daily history. Tagged P0 in diagnostics.
+P0_HOSTS = ("https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com")
+P0_DELAY = 0.25
+_p0_lock = threading.Lock()
+_p0_last = [0.0]
+
+
+def _p0_pace():
+    with _p0_lock:
+        wait = P0_DELAY - (time.time() - _p0_last[0])
+        if wait > 0:
+            time.sleep(wait)
+        _p0_last[0] = time.time()
+
+
+def fetch_chart(symbol: str, start: date, end: date) -> pd.DataFrame | None:
+    """Daily OHLCV from the chart API. A symbol the API doesn't list fails
+    quietly; only rate limits and transport errors count toward the breaker,
+    so one missing ticker never stops the scan."""
+    if _breaker_open("p0"):
+        LAST_ERRORS[symbol] = _cooling_msg("p0")
+        return None
+    p1 = int(datetime(start.year, start.month, start.day, tzinfo=timezone.utc).timestamp())
+    p2 = int(datetime(end.year, end.month, end.day, tzinfo=timezone.utc).timestamp()) + 2 * 86400
+    params = {"period1": p1, "period2": p2, "interval": "1d",
+              "events": "history", "includeAdjustedClose": "false"}
+    err, transport_fail = None, False
+    for attempt, host in enumerate(P0_HOSTS * 2):
+        if attempt:
+            time.sleep(0.6 * attempt)
+        _p0_pace()
+        try:
+            r = _session().get(f"{host}/v8/finance/chart/{symbol}.KA",
+                               params=params, timeout=20)
+        except requests.RequestException as e:
+            err, transport_fail = f"P0 {type(e).__name__}", True
+            continue
+        if r.status_code == 429 or r.status_code >= 500:
+            err, transport_fail = f"P0 HTTP {r.status_code}", True
+            continue
+        try:
+            payload = r.json()
+        except ValueError:
+            err, transport_fail = "P0 bad JSON", True
+            continue
+        chart = (payload or {}).get("chart") or {}
+        res = (chart.get("result") or [None])[0]
+        if not res:
+            desc = ((chart.get("error") or {}).get("description") or f"HTTP {r.status_code}")
+            LAST_ERRORS[symbol] = f"P0 not listed: {str(desc)[:60]}"
+            return None                       # not a source failure
+        ts = res.get("timestamp") or []
+        q = ((res.get("indicators") or {}).get("quote") or [{}])[0]
+        if not ts or not q:
+            LAST_ERRORS[symbol] = "P0 no rows returned"
+            return None
+        off = int((res.get("meta") or {}).get("gmtoffset") or 18000)   # PKT +5h
+        dates = [pd.Timestamp(datetime.fromtimestamp(t + off, tz=timezone.utc).date())
+                 for t in ts]
+        df = pd.DataFrame({"Open": q.get("open"), "High": q.get("high"),
+                           "Low": q.get("low"), "Close": q.get("close"),
+                           "Volume": q.get("volume")}, index=dates).astype(float)
+        df = df[~df.index.duplicated(keep="last")]
+        df["Volume"] = df["Volume"].fillna(0.0)
+        out = _finalize(df, start, end, symbol)
+        _breaker_report("p0", True)
+        return out
+    LAST_ERRORS[symbol] = err or "P0 unknown failure"
+    if transport_fail:
+        _LAST_REAL["p0"] = LAST_ERRORS[symbol]
+        _breaker_report("p0", False)
+    return None
 
 
 def _scs_parse_date(v) -> pd.Timestamp | None:
@@ -524,6 +601,12 @@ def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFra
     if df is not None:
         STALE_NOTES.pop(symbol, None)
         return df
+    df = fetch_chart(symbol, start, end)
+    if df is not None:
+        _cache_write(symbol, start, end, df)
+        STALE_NOTES.pop(symbol, None)
+        return df
+    p0_err = LAST_ERRORS.get(symbol, "P0 failed")
     df = fetch_scstrade(symbol, start, end)
     if df is not None:
         _cache_write(symbol, start, end, df)
@@ -548,5 +631,5 @@ def fetch_daily(symbol: str, start: date, end: date | None = None) -> pd.DataFra
         LAST_ERRORS.pop(symbol, None)
         STALE_NOTES[symbol] = asof
         return stale
-    LAST_ERRORS[symbol] = f"{scs_err} | {psx_err} | {p3_err}"
+    LAST_ERRORS[symbol] = f"{p0_err} | {scs_err} | {psx_err} | {p3_err}"
     return None
