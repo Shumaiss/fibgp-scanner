@@ -22,6 +22,7 @@ import streamlit as st
 
 from fibgp_engine import FibGPEngine, EngineResult
 from ob_engine import OrderBlockEngine
+from liq_engine import LiquidityEngine
 from psx_fetch import (fetch_daily, LAST_ERRORS, CACHE_DIR,
                        repo_symbols, repo_meta, STALE_NOTES)
 from forex_fetch import (fetch_daily_fx, list_symbols_fx, tv_symbol_fx,
@@ -168,6 +169,14 @@ BADGE = {
     "WATCHING":        ("WATCHING", "b-watch"),
     "NO_ZONE":         ("NO ZONE", "b-nozone"),
 }
+BADGE_LIQ = {
+    "IN_SUPPORT":      ("▲ AT SSL", "b-insup"),
+    "NEAR_SUPPORT":    ("▲ NEAR SSL", "b-nearsup"),
+    "IN_RESISTANCE":   ("▼ AT BSL", "b-inres"),
+    "NEAR_RESISTANCE": ("▼ NEAR BSL", "b-nearres"),
+    "WATCHING":        ("WATCHING", "b-watch"),
+    "NO_ZONE":         ("NO LEVEL", "b-nozone"),
+}
 STATUS_RANK = {"IN_SUPPORT": 0, "IN_RESISTANCE": 0, "NEAR_SUPPORT": 1,
                "NEAR_RESISTANCE": 1, "WATCHING": 2, "NO_ZONE": 3}
 
@@ -176,6 +185,31 @@ def build_row(sym: str, r: EngineResult, thr: float) -> Row:
     """Categorize a symbol against its active zones for the dashboard table."""
     c = r.close
     sup, res = r.support, r.resistance
+
+    if getattr(r, "is_lines", False):
+        tol = getattr(r, "line_tol", 0.0)
+        cand = []   # (dist, side, level, at_level)
+        if sup is not None and sup.top > 0:
+            cand.append((max(0.0, c - sup.top) / sup.top * 100.0, "sup", sup,
+                         c - sup.top <= tol))
+        if res is not None and c > 0:
+            cand.append((max(0.0, res.bot - c) / c * 100.0, "res", res,
+                         res.bot - c <= tol))
+        if not cand:
+            return Row(sym, c, "NO_ZONE", "", math.nan, math.nan, math.inf, 0,
+                       "", "", r.rsi, r.stoch.signal, r.stoch.dots, 0, False,
+                       r.structure)
+        dist, side, z, at = min(cand, key=lambda x: x[0])
+        if at:
+            status = "IN_SUPPORT" if side == "sup" else "IN_RESISTANCE"
+        elif dist <= thr:
+            status = "NEAR_SUPPORT" if side == "sup" else "NEAR_RESISTANCE"
+        else:
+            status = "WATCHING"
+        return Row(sym, c, status, side, z.bot, z.top, dist, z.star_count,
+                   z.stars, r.conf_tags(side), r.rsi, r.stoch.signal,
+                   r.stoch.dots, r.n_bars - 1 - z.anchor_idx, False,
+                   r.structure)
 
     cand = []   # (dist, side, zone)
     if sup is not None:
@@ -296,11 +330,13 @@ with st.sidebar:
                 f"<div class='hd-sub'>KEY LEVELS · 4H / DAILY / WEEKLY / MONTHLY</div>",
                 unsafe_allow_html=True)
     st.write("")
-    strategy = st.radio("Strategy", ["Zones", "Order Blocks"],
-                        help="Zones: golden-pocket support and resistance. "
+    strategy = st.radio("Strategy", ["Zones", "Order Blocks", "Liquidity"],
+                        help="Zones: support and resistance zones. "
                              "Order Blocks: the last opposing candle before a "
                              "displacement that breaks structure, tracked until "
-                             "price trades through it.")
+                             "price trades through it. "
+                             "Liquidity: the nearest untaken swing high above "
+                             "price (BSL) and swing low below it (SSL).")
     st.write("")
     universe_choice = st.radio("Universe",
                                ["All PSX", "KSE-100", "Quick 25",
@@ -362,8 +398,16 @@ with st.sidebar:
     ob_look = 8
     ob_max = 6
     ob_atr = 0.25
+    liq_len = 2
+    liq_tol = 0.15
+    liq_max = 8
     with st.expander("Engine parameters"):
-        if strategy == "Order Blocks":
+        if strategy == "Liquidity":
+            liq_len = st.number_input("Swing length (bars each side)", 1, 10, 2)
+            liq_tol = st.number_input("Equal-level tolerance (ATR multiple)",
+                                      0.0, 1.0, 0.15, step=0.05)
+            liq_max = st.number_input("Levels kept per side", 1, 20, 8)
+        elif strategy == "Order Blocks":
             ob_bos = st.number_input("Structure pivot length", 2, 20, 5)
             ob_look = st.number_input("Opposing-candle lookback", 3, 20, 8)
             ob_max = st.number_input("Blocks kept per side", 1, 12, 6)
@@ -513,7 +557,10 @@ if run_scan:
         if "fallback" in src_note:
             st.warning(f"Using built-in majors list ({len(symbols)} pairs) — "
                        f"full listing temporarily unavailable.")
-    if strategy == "Order Blocks":
+    if strategy == "Liquidity":
+        engine = LiquidityEngine(liq_l=int(liq_len), liq_r=int(liq_len),
+                                 tol_m=float(liq_tol), liq_max=int(liq_max))
+    elif strategy == "Order Blocks":
         engine = OrderBlockEngine(bos_len=int(ob_bos), ob_look=int(ob_look),
                                   ob_max=int(ob_max), min_atr_x=float(ob_atr))
     else:
@@ -570,18 +617,26 @@ tot = len(rows) + len(failed)
 def pct(n): return f"({100 * n / tot:.1f}%)" if tot else ""
 
 
+_liq_view = st.session_state.get("scan_strategy", "Zones") == "Liquidity"
+_lbl_in, _lbl_near, _lbl_none = (("AT LEVEL", "NEAR LEVEL", "NO LEVEL / N.A.")
+                                 if _liq_view else
+                                 ("IN ZONE", "NEAR ZONE", "NO ZONE / N.A."))
 st.markdown(f"""<div class='statrow'>
  <div class='stat'><div class='k'>UNIVERSE</div><div class='v'>{tot}</div><div class='p'>tickers</div></div>
- <div class='stat hero'><div class='k' style='color:{WHITE}'>IN ZONE</div><div class='v' style='color:{WHITE}'>{n_in}</div><div class='p'>{pct(n_in)}</div></div>
- <div class='stat'><div class='k' style='color:#C9C9D1'>NEAR ZONE</div><div class='v' style='color:#C9C9D1'>{n_near}</div><div class='p'>≤ {near_pct:g}% {pct(n_near)}</div></div>
+ <div class='stat hero'><div class='k' style='color:{WHITE}'>{_lbl_in}</div><div class='v' style='color:{WHITE}'>{n_in}</div><div class='p'>{pct(n_in)}</div></div>
+ <div class='stat'><div class='k' style='color:#C9C9D1'>{_lbl_near}</div><div class='v' style='color:#C9C9D1'>{n_near}</div><div class='p'>≤ {near_pct:g}% {pct(n_near)}</div></div>
  <div class='stat'><div class='k' style='color:{AMBER}'>WATCHING</div><div class='v' style='color:{AMBER}'>{n_watch}</div><div class='p'>{pct(n_watch)}</div></div>
- <div class='stat'><div class='k'>NO ZONE / N.A.</div><div class='v'>{n_none}</div><div class='p'>{pct(n_none)}</div></div>
+ <div class='stat'><div class='k'>{_lbl_none}</div><div class='v'>{n_none}</div><div class='p'>{pct(n_none)}</div></div>
 </div>""", unsafe_allow_html=True)
 st.write("")
 
 # ============================== FILTER CHIPS ===================================
-flt = st.radio("Show", ["All", "In zone", "Near zone", "Watching", "Support side", "Resistance side"],
-               horizontal=True, label_visibility="collapsed")
+_chips = (["All", "At level", "Near level", "Watching", "SSL side", "BSL side"]
+          if _liq_view else
+          ["All", "In zone", "Near zone", "Watching", "Support side", "Resistance side"])
+_flt_lbl = st.radio("Show", _chips, horizontal=True, label_visibility="collapsed")
+flt = ["All", "In zone", "Near zone", "Watching", "Support side",
+       "Resistance side"][_chips.index(_flt_lbl)]
 if st.session_state.get("last_filter") != (flt, search):
     st.session_state.page = 1
     st.session_state.last_filter = (flt, search)
@@ -626,7 +681,7 @@ with left:
            st.session_state.get("scan_start", ""))
     body = ""
     for i, r in enumerate(page_rows, start=(pg - 1) * PAGE_SIZE + 1):
-        label, cls = BADGE[r.status]
+        label, cls = (BADGE_LIQ if _liq_view else BADGE)[r.status]
         dcls = "dgreen" if r.dist <= near_pct else ("damber" if r.dist < math.inf else "mut")
         dist_txt = "—" if r.dist == math.inf else f"{r.dist:.2f}%"
         star_txt = f"<span class='stars'>{'★' * r.stars}</span><span class='mut'>{'☆' * (5 - r.stars)}</span>" if r.status != "NO_ZONE" else "<span class='mut'>—</span>"
