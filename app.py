@@ -696,6 +696,47 @@ with hd_r:
 st.markdown(whale_banner(strategy), unsafe_allow_html=True)
 st.write("")
 
+# ---- PSX source test: open the app URL with ?probe=psx ----
+if st.query_params.get("probe") == "psx":
+    with st.expander("PSX SOURCE TEST", expanded=True):
+        st.caption("Tries several free data sources for one PSX ticker (HBL) "
+                   "from this server. Screenshot the result.")
+        if st.button("Run source test"):
+            import requests as _rq
+            from forex_fetch import _api_key as _td_key
+            _ua = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                 "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                 "Chrome/126.0.0.0 Safari/537.36",
+                   "Accept": "application/json,text/html,*/*"}
+            _tests = [
+                ("Y1", "https://query1.finance.yahoo.com/v8/finance/chart/HBL.KA",
+                 {"range": "1mo", "interval": "1d"}),
+                ("Y2", "https://query2.finance.yahoo.com/v8/finance/chart/HBL.KA",
+                 {"range": "1mo", "interval": "1d"}),
+                ("Y3", "https://query1.finance.yahoo.com/v8/finance/chart/OGDC.KA",
+                 {"range": "2y", "interval": "1d"}),
+                ("T1", "https://psxterminal.com/api/klines/HBL/1d", {"limit": 30}),
+                ("T2", "https://psxterminal.com/api/klines/HBL/4h", {"limit": 30}),
+                ("D1", "https://dps.psx.com.pk/timeseries/eod/HBL", {}),
+                ("D2", "https://dps.psx.com.pk/timeseries/int/HBL", {}),
+                ("S1", "https://stockanalysis.com/quote/psx/HBL/history/", {}),
+                ("Q1", "https://stooq.com/q/d/l/", {"s": "hbl.pk", "i": "d"}),
+            ]
+            _k = _td_key()
+            if _k:
+                _tests.append(("X1", "https://api.twelvedata.com/time_series",
+                               {"symbol": "HBL", "exchange": "XKAR", "interval": "1day",
+                                "outputsize": 5, "apikey": _k}))
+            for _tag, _url, _prm in _tests:
+                try:
+                    _r = _rq.get(_url, params=_prm, headers=_ua, timeout=15)
+                    _body = _r.text[:170].replace("\n", " ").replace("`", "'")
+                    st.markdown(f"`{_tag}` **HTTP {_r.status_code}** · {len(_r.text):,} chars")
+                    st.code(_body or "(empty)", language=None)
+                except Exception as _e:
+                    st.markdown(f"`{_tag}` **FAILED** · {type(_e).__name__}")
+                    st.code(str(_e)[:170], language=None)
+
 if st.session_state.scan is None:
     st.markdown(f"<div class='hud panel'><span class='mut'>Pick a universe and press "
                 f"<b>SCAN</b>. Every symbol is categorized: in zone, near zone "
