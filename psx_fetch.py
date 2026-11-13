@@ -56,6 +56,15 @@ _state = {"p1_fails": 0, "p1_down_until": 0.0,
 _state_lock = threading.Lock()
 
 
+# last genuine failure per route, so a cooling-down message never hides the cause
+_LAST_REAL: dict[str, str] = {"p1": "", "p2": "", "p3": ""}
+
+
+def _cooling_msg(key: str) -> str:
+    why = _LAST_REAL.get(key) or "no error recorded"
+    return f"{key.upper()} cooling down — last real error: {why}"
+
+
 def _breaker_open(key: str) -> bool:
     with _state_lock:
         return time.time() < _state[f"{key}_down_until"]
@@ -132,7 +141,7 @@ def _pick_key(keys, *needles) -> str | None:
 def fetch_scstrade(symbol: str, start: date, end: date,
                    timeout: float = 30.0, retries: int = 2) -> pd.DataFrame | None:
     if _breaker_open("p1"):
-        LAST_ERRORS[symbol] = "P1 cooling down (breaker open)"
+        LAST_ERRORS[symbol] = _cooling_msg("p1")
         return None
     payload = {"par": symbol,
                "date1": start.strftime("%m/%d/%Y"),
@@ -197,6 +206,7 @@ def fetch_scstrade(symbol: str, start: date, end: date,
         except ValueError as e:            # JSON decode / float cast
             err = f"SCS parse error: {str(e)[:100]}"
     LAST_ERRORS[symbol] = err or "SCS unknown failure"
+    _LAST_REAL["p1"] = LAST_ERRORS[symbol]
     _breaker_report("p1", False)
     return None
 
@@ -232,7 +242,7 @@ def _psx_month(symbol: str, d: date, timeout: float = 20.0):
 
 def fetch_psx(symbol: str, start: date, end: date) -> pd.DataFrame | None:
     if _breaker_open("p2"):
-        LAST_ERRORS[symbol] = "P2 cooling down (breaker open)"
+        LAST_ERRORS[symbol] = _cooling_msg("p2")
         return None
     cur = date(start.year, start.month, 1)
     months = [cur]
@@ -255,6 +265,7 @@ def fetch_psx(symbol: str, start: date, end: date) -> pd.DataFrame | None:
 
     if not frames:
         LAST_ERRORS[symbol] = errs[0] if errs else "PSX no rows returned"
+        _LAST_REAL["p2"] = LAST_ERRORS[symbol]
         _breaker_report("p2", False)
         return None
     df = pd.concat(frames, ignore_index=True)
@@ -376,7 +387,7 @@ def _p3_month(symbol: str, d: date, timeout: float = 25.0):
 def fetch_relay(symbol: str, start: date, end: date) -> pd.DataFrame | None:
     """PSX monthly pages via the relay. Same parsing as the direct route."""
     if _breaker_open("p3"):
-        LAST_ERRORS[symbol] = "P3 cooling down (breaker open)"
+        LAST_ERRORS[symbol] = _cooling_msg("p3")
         return None
     cur = date(start.year, start.month, 1)
     months = [cur]
@@ -399,6 +410,7 @@ def fetch_relay(symbol: str, start: date, end: date) -> pd.DataFrame | None:
 
     if not frames:
         LAST_ERRORS[symbol] = errs[0] if errs else "P3 no rows returned"
+        _LAST_REAL["p3"] = LAST_ERRORS[symbol]
         _breaker_report("p3", False)
         return None
     df = pd.concat(frames, ignore_index=True)
