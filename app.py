@@ -34,110 +34,207 @@ from crypto_fetch import (fetch_daily_crypto, list_symbols,
 from symbols import ALL_PSX, KSE100, QUICK25
 
 # ============================== PALETTE ========================================
-BG     = "#0A0A0B"
-PANEL  = "#101012"
-PANEL2 = "#17171A"
-LINE   = "#242429"
-# Base is strictly black/white/grey. Colour carries meaning only:
-GREEN   = "#26C281"         # support side · bullish structure
-GREEN_L = "#7FE0B0"         # near support
-RED_C   = "#E5484D"         # resistance side · bearish structure
-RED_L   = "#F5A0A3"         # near resistance
-WHITE   = "#FFFFFF"         # every non-semantic accent
-MINT   = "#FFFFFF"          # primary text accent
-MINTD  = "#2E2E33"
-RED    = "#9A9AA3"          # secondary emphasis
-AMBER  = "#6E6E78"          # tertiary emphasis
-TXT    = "#E8E8EC"
-MUTE   = "#7A7A85"
-DIM    = "#4A4A52"
+BG     = "#04080E"
+PANEL  = "#06121C"
+PANEL2 = "#081824"
+LINE   = "#16445C"
+ROWLN  = "#0D2A3A"
+ACC    = "#35E0FF"          # the one accent: glow, numbers, buttons
+ON_ACC = "#021016"          # text on an accent fill
+# Status colours keep their meaning:
+GREEN   = "#2EE6A6"         # support side · bullish trend
+GREEN_L = "#8CF2CF"         # near support
+RED_C   = "#FF5A6E"         # resistance side · bearish trend
+RED_L   = "#FFA3AE"         # near resistance
+TXT    = "#DDF6FF"
+MUTE   = "#7FA9BD"
+DIM    = "#4E7C92"
+F_HEAD = "'Orbitron',sans-serif"
+F_BODY = "'Rajdhani',sans-serif"
+F_MONO = "'Share Tech Mono',monospace"
 
 PAGE_SIZE = 25
 
-st.set_page_config(page_title="Whale Scanner", page_icon="◆",
+st.set_page_config(page_title="Whale Scanner", page_icon="🐋",
                    layout="wide", initial_sidebar_state="expanded")
 
 st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Rajdhani:wght@500;600;700&display=swap');
-.stApp {{ background:
-  radial-gradient(1200px 500px at 50% -10%, #101014 0%, {BG} 55%); }}
-html, body, [class*="css"] {{ font-family:'JetBrains Mono',monospace; color:{TXT};
-  font-variant-numeric: tabular-nums; }}
-section[data-testid="stSidebar"] {{ background:{PANEL};
-  border-right:1px solid rgba(255,255,255,.05); }}
-h1,h2,h3 {{ font-family:'Rajdhani',sans-serif; }}
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap');
+.stApp {{ background-color:{BG};
+  background-image:linear-gradient(rgba(53,224,255,.05) 1px, transparent 1px),
+                   linear-gradient(90deg, rgba(53,224,255,.05) 1px, transparent 1px);
+  background-size:40px 40px; }}
+html, body, [class*="css"], .stApp p, .stApp label {{ font-family:{F_BODY}; color:{TXT};
+  font-variant-numeric:tabular-nums; }}
+header[data-testid="stHeader"] {{ background:transparent; }}
+section[data-testid="stSidebar"] {{ background:rgba(6,18,28,.92);
+  border-right:1px solid {LINE}; }}
+section[data-testid="stSidebar"] label p {{ font-size:1rem; letter-spacing:.06em; }}
+div[data-testid="stWidgetLabel"] p {{ font-family:{F_MONO}; font-size:.68rem !important;
+  letter-spacing:.24em; text-transform:uppercase; color:{MUTE}; }}
+h1,h2,h3 {{ font-family:{F_HEAD}; }}
 ::-webkit-scrollbar {{ width:10px; height:10px; }}
 ::-webkit-scrollbar-track {{ background:{BG}; }}
-::-webkit-scrollbar-thumb {{ background:#26262C; border-radius:5px; }}
+::-webkit-scrollbar-thumb {{ background:{LINE}; border-radius:2px; }}
 
-.hd-title {{ font-family:'Rajdhani',sans-serif; font-size:2.1rem; font-weight:700;
-  letter-spacing:.12em; line-height:1.0; }}
-.hd-title .m {{ color:#FFFFFF; }}
-.hd-rule {{ width:56px; height:2px; background:{WHITE}; margin:8px 0 2px 0; }}
-.hd-sub {{ color:{MUTE}; font-size:.72rem; letter-spacing:.14em; }}
+.hd-title {{ font-family:{F_HEAD}; font-size:1.75rem; font-weight:700;
+  letter-spacing:.2em; line-height:1.1; color:{TXT};
+  text-shadow:0 0 18px rgba(53,224,255,.55); }}
+.hd-rule {{ height:1px; margin:10px 0 6px 0;
+  background:linear-gradient(90deg, {ACC} 0, {ACC} 120px, {LINE} 120px, {LINE} 100%); }}
+.hd-sub {{ color:{MUTE}; font-family:{F_MONO}; font-size:.68rem; letter-spacing:.22em; }}
+.sb-logo {{ display:flex; align-items:center; gap:12px; }}
+.sb-mark {{ display:inline-flex; align-items:center; justify-content:center; flex:0 0 52px;
+  width:52px; height:52px; border:1px solid {ACC}; border-radius:50%;
+  box-shadow:0 0 14px rgba(53,224,255,.45); }}
+.sb-name {{ font-family:{F_HEAD}; font-size:1.05rem; font-weight:700; letter-spacing:.2em;
+  line-height:1.2; color:{TXT}; }}
 
-.statrow {{ display:grid; grid-template-columns:repeat(5,1fr); gap:12px; }}
-.stat {{ background:linear-gradient({PANEL2}, {PANEL});
-  border:1px solid rgba(255,255,255,.06); border-top-color:rgba(255,255,255,.12);
-  border-radius:12px; padding:14px 16px 12px; box-shadow:0 8px 24px rgba(0,0,0,.35); }}
-.stat .k {{ font-size:.6rem; letter-spacing:.2em; color:{MUTE}; }}
-.stat .v {{ font-family:'Rajdhani',sans-serif; font-size:2.15rem; font-weight:700;
-  line-height:1.05; letter-spacing:.02em; }}
-.stat .p {{ font-size:.66rem; color:{MUTE}; }}
-.stat.hero {{ border-left:2px solid {WHITE};
-  box-shadow:0 8px 24px rgba(0,0,0,.35), inset 0 0 40px rgba(255,255,255,.04); }}
+.hud {{ background-color:rgba(8,24,36,.72); border:1px solid {LINE};
+  background-image:linear-gradient({ACC},{ACC}),linear-gradient({ACC},{ACC}),linear-gradient({ACC},{ACC}),linear-gradient({ACC},{ACC}),linear-gradient({ACC},{ACC}),linear-gradient({ACC},{ACC}),linear-gradient({ACC},{ACC}),linear-gradient({ACC},{ACC});
+  background-repeat:no-repeat;
+  background-size:14px 1px,1px 14px,14px 1px,1px 14px,14px 1px,1px 14px,14px 1px,1px 14px;
+  background-position:0 0,0 0,100% 0,100% 0,0 100%,0 100%,100% 100%,100% 100%; }}
 
-.panel {{ background:linear-gradient({PANEL2}, {PANEL});
-  border:1px solid rgba(255,255,255,.06); border-top-color:rgba(255,255,255,.10);
-  border-radius:14px; padding:16px 18px; box-shadow:0 10px 30px rgba(0,0,0,.35); }}
-.panel-hd {{ font-family:'Rajdhani',sans-serif; font-weight:700; letter-spacing:.18em;
+.statrow {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; }}
+.stat {{ padding:14px 18px 12px; }}
+.stat .k {{ font-family:{F_MONO}; font-size:.62rem; letter-spacing:.24em; color:{MUTE}; }}
+.stat .v {{ font-family:{F_HEAD}; font-size:2.2rem; font-weight:700; line-height:1.2; color:{TXT}; }}
+.stat .p {{ font-family:{F_MONO}; font-size:.68rem; color:{MUTE}; }}
+.stat.hero {{ box-shadow:0 0 24px rgba(53,224,255,.22), inset 0 0 30px rgba(53,224,255,.08); }}
+.stat.hero .k {{ color:{ACC}; }}
+.stat.hero .v {{ color:{ACC}; text-shadow:0 0 16px rgba(53,224,255,.7); }}
+
+.panel {{ padding:14px 16px; }}
+.panel-hd {{ font-family:{F_HEAD}; font-weight:700; letter-spacing:.18em;
   font-size:.9rem; margin-bottom:10px; }}
 
-table.scan {{ width:100%; border-collapse:collapse; font-size:.76rem; }}
-table.scan th {{ color:{MUTE}; font-weight:500; font-size:.6rem; letter-spacing:.16em;
-  text-align:left; padding:7px 9px; border-bottom:1px solid rgba(255,255,255,.10);
+.whale {{ display:flex; flex-wrap:wrap; align-items:center; gap:8px 28px; padding:2px 24px; }}
+.whale .art {{ flex:0 1 286px; max-width:100%; line-height:0; }}
+.whale .copy {{ flex:1 1 300px; display:flex; flex-direction:column; gap:8px; padding:10px 0; }}
+.whale .eyebrow {{ font-family:{F_MONO}; font-size:.68rem; letter-spacing:.3em; color:{ACC}; }}
+.whale .big {{ font-family:{F_HEAD}; font-size:1.35rem; font-weight:700; letter-spacing:.08em;
+  line-height:1.25; color:{TXT}; }}
+.whale .small {{ font-size:.95rem; line-height:1.4; color:{MUTE}; max-width:520px; }}
+.whale .chips {{ display:flex; flex-wrap:wrap; gap:8px; }}
+.whale .chip {{ padding:5px 12px; border:1px solid {LINE}; font-family:{F_MONO};
+  font-size:.68rem; letter-spacing:.16em; color:{TXT}; }}
+.whale .chip.on {{ border-color:{ACC}; color:{ACC}; box-shadow:0 0 10px rgba(53,224,255,.35); }}
+@keyframes wsSpin {{ to {{ transform:rotate(360deg); }} }}
+@keyframes wsRise {{ 0% {{ transform:translateY(6px); opacity:.55; }} 50% {{ opacity:1; }}
+  100% {{ transform:translateY(-8px); opacity:.55; }} }}
+.ws-spin {{ transform-origin:120px 55px; animation:wsSpin 18s linear infinite; }}
+.ws-rise {{ animation:wsRise 3.2s ease-in-out infinite alternate; }}
+@media (prefers-reduced-motion: reduce) {{ .ws-spin, .ws-rise {{ animation:none; }} }}
+
+.tablebox {{ overflow-x:auto; }}
+table.scan {{ width:100%; border-collapse:collapse; font-size:.9rem; }}
+table.scan th {{ color:{MUTE}; font-family:{F_MONO}; font-weight:400; font-size:.62rem;
+  letter-spacing:.2em; text-align:left; padding:9px 11px; border-bottom:1px solid {LINE};
   white-space:nowrap; }}
-table.scan th.num, table.scan td.num {{ text-align:right; }}
-table.scan td {{ padding:9px 9px; border-bottom:1px solid rgba(255,255,255,.045);
+table.scan th.num, table.scan td.num {{ text-align:right; font-family:{F_MONO}; }}
+table.scan td {{ padding:10px 11px; border-bottom:1px solid {ROWLN};
   white-space:nowrap; vertical-align:middle; }}
-table.scan tr:hover td {{ background:rgba(255,255,255,.028); }}
+table.scan tr:hover td {{ background:rgba(53,224,255,.06); }}
 table.scan tr:last-child td {{ border-bottom:none; }}
-.tick {{ color:#FFFFFF; font-weight:800; letter-spacing:.02em;
-  text-decoration:none; }}
-a.tick:hover {{ color:{WHITE}; text-decoration:underline; text-underline-offset:3px; }}
+.tick {{ font-family:{F_HEAD}; color:{TXT}; font-weight:700; font-size:.82rem;
+  letter-spacing:.08em; text-decoration:none; }}
+a.tick:hover {{ color:{ACC}; text-shadow:0 0 10px rgba(53,224,255,.6); }}
 .goto {{ opacity:0; font-size:.7em; margin-left:3px; transition:opacity .12s; }}
 a:hover .goto {{ opacity:.85; }}
-.badge {{ display:inline-block; padding:2px 9px; border-radius:5px; font-size:.6rem;
-  letter-spacing:.1em; font-weight:700; }}
-.b-insup  {{ background:{GREEN}; color:#07110C; border:1px solid {GREEN}; font-weight:800; }}
-.b-nearsup{{ background:transparent; color:{GREEN_L}; border:1px solid rgba(127,224,176,.55); }}
-.b-inres  {{ background:{RED_C}; color:#140708; border:1px solid {RED_C}; font-weight:800; }}
-.b-nearres{{ background:transparent; color:{RED_L}; border:1px solid rgba(245,160,163,.55); }}
+.badge {{ display:inline-block; padding:3px 10px; border-radius:2px; font-size:.68rem;
+  letter-spacing:.12em; font-weight:700; }}
+.b-insup  {{ background:{GREEN}; color:#04140E; border:1px solid {GREEN}; }}
+.b-nearsup{{ background:transparent; color:{GREEN_L}; border:1px solid {GREEN_L}; }}
+.b-inres  {{ background:{RED_C}; color:#19060A; border:1px solid {RED_C}; }}
+.b-nearres{{ background:transparent; color:{RED_L}; border:1px solid {RED_L}; }}
 .b-watch  {{ background:transparent; color:{MUTE}; border:1px solid {LINE}; }}
-.b-nozone {{ background:transparent; color:{DIM}; border:1px dashed {LINE}; }}
-.stars {{ color:{WHITE}; letter-spacing:.06em; }}
-.st-bull {{ color:{GREEN}; font-weight:700; font-size:.62rem; letter-spacing:.1em; }}
-.st-bear {{ color:{RED_C}; font-weight:700; font-size:.62rem; letter-spacing:.1em; }}
-.st-mix  {{ color:#6E6E78; font-weight:600; font-size:.62rem; letter-spacing:.1em; }}
-.pill {{ display:inline-block; padding:1px 7px; border-radius:9px; font-size:.62rem;
-  margin-left:5px; vertical-align:1px; background:{PANEL2}; color:#C9C9D1;
+.b-nozone {{ background:transparent; color:{MUTE}; border:1px dashed {LINE}; }}
+.sbars {{ display:inline-flex; align-items:center; gap:3px; }}
+.sbar {{ display:inline-block; width:14px; height:4px; background:{LINE}; }}
+.sbar.on {{ background:{ACC}; box-shadow:0 0 6px rgba(53,224,255,.8); }}
+.st-bull {{ color:{GREEN}; font-weight:700; font-size:.7rem; letter-spacing:.12em; }}
+.st-bear {{ color:{RED_C}; font-weight:700; font-size:.7rem; letter-spacing:.12em; }}
+.st-mix  {{ color:{MUTE}; font-weight:600; font-size:.7rem; letter-spacing:.12em; }}
+.pill {{ display:inline-block; padding:1px 7px; border-radius:2px; font-size:.66rem;
+  margin-left:5px; vertical-align:1px; background:{PANEL2}; color:{TXT};
   border:1px solid {LINE}; }}
-.mut {{ color:#8B8B96; }}
-.dgreen {{ color:{GREEN}; }} .dred {{ color:{RED_C}; }} .damber {{ color:#9A9AA3; }}
+.mut {{ color:{MUTE}; }}
+.dgreen {{ color:{GREEN}; }} .dred {{ color:{RED_C}; }} .damber {{ color:{MUTE}; }}
+.dacc {{ color:{ACC}; }}
 
-
-
-
-.stButton>button {{ border:1px solid rgba(255,255,255,.18); background:transparent;
-  color:{TXT}; border-radius:9px; transition:all .12s; }}
-.stButton>button:hover {{ background:{WHITE}; color:#0A0A0B; border-color:{WHITE}; }}
-button[kind="primary"] {{ background:{WHITE} !important; color:#0A0A0B !important;
-  border-color:{WHITE} !important; font-weight:700; }}
-div[data-testid="stTextInput"] input {{ background:{PANEL2};
-  border:1px solid rgba(255,255,255,.10); color:{TXT}; border-radius:9px; }}
+.stButton>button, .stDownloadButton>button {{ border:1px solid {LINE}; background:transparent;
+  color:{TXT}; border-radius:2px; font-family:{F_BODY}; letter-spacing:.1em; transition:all .12s; }}
+.stButton>button:hover, .stDownloadButton>button:hover {{ background:{ACC}; color:{ON_ACC};
+  border-color:{ACC}; box-shadow:0 0 14px rgba(53,224,255,.5); }}
+button[kind="primary"] {{ background:{ACC} !important; color:{ON_ACC} !important;
+  border-color:{ACC} !important; font-family:{F_HEAD} !important; font-weight:700;
+  letter-spacing:.3em !important; box-shadow:0 0 14px rgba(53,224,255,.5); }}
+button[kind="primary"] p {{ font-family:{F_HEAD} !important; color:{ON_ACC} !important; }}
+div[data-testid="stTextInput"] input {{ background:{PANEL2}; border:1px solid {LINE};
+  color:{TXT}; border-radius:2px; font-family:{F_MONO}; }}
+div[data-testid="stExpander"] details {{ border:1px solid {LINE}; border-radius:2px;
+  background:rgba(8,24,36,.5); }}
 </style>
 """, unsafe_allow_html=True)
+
+
+# ============================== WHALE ART ======================================
+WHALE_BODY = ("M18 66 C22 38 70 22 120 28 C155 32 180 46 198 56 L226 34 L216 59 L228 80 L198 65 "
+              "C170 82 120 93 70 90 C40 88 22 80 18 66 Z")
+
+
+def whale_mark() -> str:
+    """Small whale glyph for the sidebar logo."""
+    return (f"<svg width='38' height='20' viewBox='0 0 240 120' aria-hidden='true'>"
+            f"<path d='{WHALE_BODY}' fill='none' stroke='{ACC}' stroke-width='7' stroke-linejoin='round'/>"
+            f"<circle cx='50' cy='60' r='6' fill='{ACC}'/></svg>")
+
+
+def whale_banner(active: str) -> str:
+    """Wireframe whale in a sonar ring, coins rising from its spout."""
+    c = ACC
+    coins = ""
+    for cx, cy, r, op in ((62, 2, 9, 1), (84, -20, 7, 0.8), (48, -30, 6, 0.6), (72, -50, 5, 0.4)):
+        coins += (f"<g opacity='{op}'><circle cx='{cx}' cy='{cy}' r='{r}' fill='{BG}' stroke='{c}' stroke-width='1.5'/>"
+                  f"<text x='{cx}' y='{cy + r * 0.42:.1f}' text-anchor='middle' font-size='{r * 1.25:.1f}' "
+                  f"font-family='Share Tech Mono, monospace' fill='{c}'>$</text></g>")
+    art = (
+        f"<svg width='286' height='170' viewBox='-90 -75 420 250' role='img' "
+        f"aria-label='Wireframe whale inside a sonar ring, with coins rising from its spout'>"
+        f"<g fill='none' stroke='{c}'>"
+        f"<circle cx='120' cy='55' r='118' stroke-width='1' opacity='0.25'/>"
+        f"<circle cx='120' cy='55' r='92' stroke-width='1' stroke-dasharray='2 7' opacity='0.5'/>"
+        f"<g class='ws-spin'>"
+        f"<circle cx='120' cy='55' r='106' stroke-width='2' stroke-dasharray='120 546' opacity='0.9'/>"
+        f"<circle cx='120' cy='55' r='106' stroke-width='2' stroke-dasharray='40 626' stroke-dashoffset='-330' opacity='0.6'/></g>"
+        f"<path d='M-20 55 H6 M234 55 H260 M120 -85 V-59 M120 169 V195' stroke-width='1.5' opacity='0.7'/></g>"
+        f"<path d='{WHALE_BODY}' fill='{c}' opacity='0.08'/>"
+        f"<path d='{WHALE_BODY}' fill='none' stroke='{c}' stroke-width='2' stroke-linejoin='round' "
+        f"style='filter:drop-shadow(0 0 6px {c})'/>"
+        f"<g fill='none' stroke='{c}' stroke-width='1' opacity='0.45'>"
+        f"<path d='M24 56 C60 40 130 40 196 58'/><path d='M22 72 C60 66 130 66 198 62'/>"
+        f"<path d='M60 30 C54 50 54 72 62 89'/><path d='M100 26 C94 48 94 74 102 92'/>"
+        f"<path d='M140 30 C136 48 136 70 142 86'/><path d='M172 42 C170 52 170 64 174 74'/></g>"
+        f"<path d='M20 72 C34 77 52 77 66 70' fill='none' stroke='{c}' stroke-width='1.5'/>"
+        f"<path d='M86 86 C94 104 110 108 120 100 C108 96 100 90 98 85' fill='{BG}' stroke='{c}' stroke-width='1.5'/>"
+        f"<circle cx='48' cy='58' r='3' fill='{c}'/>"
+        f"<path d='M62 24 V14' stroke='{c}' stroke-width='1.5' stroke-dasharray='2 3'/>"
+        f"<g class='ws-rise'>{coins}</g></svg>")
+    chips = "".join(f"<span class='chip{' on' if s == active else ''}'>{s.upper()}</span>"
+                    for s in ("Zones", "Order Blocks", "Liquidity"))
+    return (f"<div class='hud whale'><div class='art'>{art}</div><div class='copy'>"
+            f"<div class='eyebrow'>WHALE RADAR</div>"
+            f"<div class='big'>FOLLOW THE BIG MONEY</div>"
+            f"<div class='small'>Find the price levels where large players are positioned, "
+            f"across every market you trade.</div>"
+            f"<div class='chips'>{chips}</div></div></div>")
+
+
+def strength_bars(n: int) -> str:
+    bars = "".join(f"<span class='sbar{' on' if i < n else ''}'></span>" for i in range(5))
+    return f"<span class='sbars' role='img' aria-label='{n} of 5 strength'>{bars}</span>"
 
 
 # ============================== ROW MODEL ======================================
@@ -250,7 +347,7 @@ def sparkline(closes: np.ndarray, w: int = 92, h: int = 26) -> str:
     rng = (hi - lo) or 1.0
     pts = " ".join(f"{i * w / (len(v) - 1):.1f},{h - 2 - (x - lo) / rng * (h - 4):.1f}"
                    for i, x in enumerate(v))
-    col = "#EDEDF1" if v[-1] >= v[0] else "#6E6E78"
+    col = ACC if v[-1] >= v[0] else DIM
     return (f"<svg width='{w}' height='{h}' viewBox='0 0 {w} {h}'>"
             f"<polyline points='{pts}' fill='none' stroke='{col}' "
             f"stroke-width='1.5' stroke-linejoin='round'/></svg>")
@@ -326,8 +423,9 @@ def fmt_px(v: float) -> str:
 
 # ============================== SIDEBAR ========================================
 with st.sidebar:
-    st.markdown(f"<div class='hd-title'><span style='color:{WHITE}'>◆</span> WHALE <span class='m'>SCANNER</span></div>"
-                f"<div class='hd-sub'>KEY LEVELS · 4H / DAILY / WEEKLY / MONTHLY</div>",
+    st.markdown(f"<div class='sb-logo'><span class='sb-mark'>{whale_mark()}</span>"
+                f"<div><div class='sb-name'>WHALE<br>SCANNER</div></div></div>"
+                f"<div class='hd-sub' style='margin-top:10px'>KEY LEVEL INTELLIGENCE</div>",
                 unsafe_allow_html=True)
     st.write("")
     strategy = st.radio("Strategy", ["Zones", "Order Blocks", "Liquidity"],
@@ -430,8 +528,8 @@ with st.sidebar:
         n_cached = 0
     _sc = st.session_state.get("scan") or (None, None, None, "—")
     stamp = _sc[3]
-    st.markdown(f"""<div class='panel' style='margin-top:8px'>
-      <div style='font-size:.66rem;letter-spacing:.12em;color:{MINT}'>● CACHE STATUS</div>
+    st.markdown(f"""<div class='hud panel' style='margin-top:8px'>
+      <div style='font-family:{F_MONO};font-size:.66rem;letter-spacing:.2em;color:{GREEN}'>● SYSTEM ONLINE</div>
       <div style='font-size:.72rem;margin-top:4px'>{n_cached} symbols cached today<br>
       <span class='mut'>Last scan: {stamp}</span></div></div>""",
         unsafe_allow_html=True)
@@ -581,9 +679,10 @@ if run_scan:
 # ============================== HEADER =========================================
 hd_l, hd_m, hd_r = st.columns([2.6, 1.6, 1.2])
 with hd_l:
-    st.markdown(f"<div class='hd-title'>WHALE <span class='m'>SCANNER</span></div>"
+    st.markdown(f"<div class='hd-title'>MARKET SCAN</div>"
                 f"<div class='hd-rule'></div>"
-                f"<div class='hd-sub'>FIND STOCKS &amp; CRYPTO AT KEY LEVELS · DAILY / WEEKLY</div>",
+                f"<div class='hd-sub'>STRATEGY · {strategy.upper()} &nbsp;|&nbsp; {universe_choice.upper()} "
+                f"&nbsp;|&nbsp; {timeframe.upper()}</div>",
                 unsafe_allow_html=True)
 with hd_m:
     search = st.text_input("Search ticker…", label_visibility="collapsed",
@@ -594,10 +693,11 @@ with hd_r:
                     f"<span class='mut'>Last updated:</span> "
                     f"<span class='dgreen'>{st.session_state.scan[3]}</span> ●</div>",
                     unsafe_allow_html=True)
+st.markdown(whale_banner(strategy), unsafe_allow_html=True)
 st.write("")
 
 if st.session_state.scan is None:
-    st.markdown(f"<div class='panel'><span class='mut'>Pick a universe and press "
+    st.markdown(f"<div class='hud panel'><span class='mut'>Pick a universe and press "
                 f"<b>SCAN</b>. Every symbol is categorized: in zone, near zone "
                 f"(≤ threshold), watching (zone active but farther), or no active "
                 f"zone.</span></div>", unsafe_allow_html=True)
@@ -622,11 +722,11 @@ _lbl_in, _lbl_near, _lbl_none = (("AT LEVEL", "NEAR LEVEL", "NO LEVEL / N.A.")
                                  if _liq_view else
                                  ("IN ZONE", "NEAR ZONE", "NO ZONE / N.A."))
 st.markdown(f"""<div class='statrow'>
- <div class='stat'><div class='k'>UNIVERSE</div><div class='v'>{tot}</div><div class='p'>tickers</div></div>
- <div class='stat hero'><div class='k' style='color:{WHITE}'>{_lbl_in}</div><div class='v' style='color:{WHITE}'>{n_in}</div><div class='p'>{pct(n_in)}</div></div>
- <div class='stat'><div class='k' style='color:#C9C9D1'>{_lbl_near}</div><div class='v' style='color:#C9C9D1'>{n_near}</div><div class='p'>≤ {near_pct:g}% {pct(n_near)}</div></div>
- <div class='stat'><div class='k' style='color:{AMBER}'>WATCHING</div><div class='v' style='color:{AMBER}'>{n_watch}</div><div class='p'>{pct(n_watch)}</div></div>
- <div class='stat'><div class='k'>{_lbl_none}</div><div class='v'>{n_none}</div><div class='p'>{pct(n_none)}</div></div>
+ <div class='hud stat'><div class='k'>UNIVERSE</div><div class='v'>{tot}</div><div class='p'>tickers</div></div>
+ <div class='hud stat hero'><div class='k'>{_lbl_in}</div><div class='v'>{n_in}</div><div class='p'>{pct(n_in)}</div></div>
+ <div class='hud stat'><div class='k'>{_lbl_near}</div><div class='v'>{n_near}</div><div class='p'>≤ {near_pct:g}% {pct(n_near)}</div></div>
+ <div class='hud stat'><div class='k'>WATCHING</div><div class='v'>{n_watch}</div><div class='p'>{pct(n_watch)}</div></div>
+ <div class='hud stat'><div class='k'>{_lbl_none}</div><div class='v'>{n_none}</div><div class='p'>{pct(n_none)}</div></div>
 </div>""", unsafe_allow_html=True)
 st.write("")
 
@@ -682,9 +782,9 @@ with left:
     body = ""
     for i, r in enumerate(page_rows, start=(pg - 1) * PAGE_SIZE + 1):
         label, cls = (BADGE_LIQ if _liq_view else BADGE)[r.status]
-        dcls = "dgreen" if r.dist <= near_pct else ("damber" if r.dist < math.inf else "mut")
+        dcls = "dacc" if r.dist < math.inf else "mut"
         dist_txt = "—" if r.dist == math.inf else f"{r.dist:.2f}%"
-        star_txt = f"<span class='stars'>{'★' * r.stars}</span><span class='mut'>{'☆' * (5 - r.stars)}</span>" if r.status != "NO_ZONE" else "<span class='mut'>—</span>"
+        star_txt = strength_bars(r.stars) if r.status != "NO_ZONE" else "<span class='mut'>—</span>"
         df = st.session_state.ohlc_cache.get((r.symbol, key))
         spark = sparkline(df["Close"].to_numpy()) if df is not None else ""
         notional = float(df["Volume"].iloc[-1] * df["Close"].iloc[-1]) if df is not None else float("nan")
@@ -699,11 +799,11 @@ with left:
                  f"<td>{struct_cell(r.structure)}</td>"
                  f"<td>{star_txt}</td>"
                  f"<td>{spark}</td></tr>")
-    st.markdown(f"""<div class='panel'>
+    st.markdown(f"""<div class='hud panel tablebox'>
       <table class='scan'>
        <tr><th>#</th><th>TICKER</th><th class='num'>PRICE</th><th class='num'>VOL</th>
        <th class='num'>DISTANCE %</th><th>STATUS</th><th>TREND</th>
-       <th>STARS</th><th>CHART</th></tr>
+       <th>STRENGTH</th><th>CHART</th></tr>
        {body if body else "<tr><td colspan='9' class='mut'>No rows match this filter.</td></tr>"}
       </table></div>""", unsafe_allow_html=True)
 
