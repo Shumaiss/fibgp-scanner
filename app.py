@@ -505,11 +505,8 @@ with st.sidebar:
     timeframe = st.radio("Timeframe", ["4H", "Daily", "Weekly", "1M"],
                          index=1, horizontal=True)
     tf = {"4H": "4h", "Weekly": "1w", "1M": "1mo"}.get(timeframe, "1d")
-    near_pct = st.slider("Near threshold (%)", 0.5, 5.0, 2.0, 0.25)
-    min_vol_lbl = st.selectbox("Min volume (last bar)",
-                               ["Off", "100K", "1M", "10M", "100M"], index=0,
-                               help="Filters thin pairs by last-bar traded value.")
-    MIN_VOL = {"Off": 0, "100K": 1e5, "1M": 1e6, "10M": 1e7, "100M": 1e8}[min_vol_lbl]
+    near_pct = 2.0   # fixed: "near zone" distance (%)
+    MIN_VOL = 0      # fixed: no minimum-volume filter
     if tf == "1mo":
         # one bar per month: 60 months = 60 bars, comfortably above the guard
         _min_m, _def_m, _max_m = 36, 60, 120
@@ -519,7 +516,7 @@ with st.sidebar:
         _min_m, _def_m, _max_m = 2, 6, 24   # ~6 months of 4H is already ~1,000 bars
     else:
         _min_m, _def_m, _max_m = 8, 18, 24
-    lookback_m = st.slider("History (months)", _min_m, _max_m, _def_m)
+    lookback_m = _def_m   # fixed: default history for the chosen timeframe
 
     # Engine settings are fixed (not shown in the UI)
     piv_l, piv_r = 5, 3
