@@ -521,35 +521,12 @@ with st.sidebar:
         _min_m, _def_m, _max_m = 8, 18, 24
     lookback_m = st.slider("History (months)", _min_m, _max_m, _def_m)
 
-    piv_l = piv_r = 5
+    # Engine settings are fixed (not shown in the UI)
+    piv_l, piv_r = 5, 3
     use_live = use_ema = use_fvg = True
     fvg_lb = 50
-    ob_bos = 5
-    ob_look = 8
-    ob_max = 6
-    ob_atr = 0.25
-    liq_len = 2
-    liq_tol = 0.15
-    liq_max = 8
-    with st.expander("Engine parameters"):
-        if strategy == "Liquidity":
-            liq_len = st.number_input("Swing length (bars each side)", 1, 10, 2)
-            liq_tol = st.number_input("Equal-level tolerance (ATR multiple)",
-                                      0.0, 1.0, 0.15, step=0.05)
-            liq_max = st.number_input("Levels kept per side", 1, 20, 8)
-        elif strategy == "Order Blocks":
-            ob_bos = st.number_input("Structure pivot length", 2, 20, 5)
-            ob_look = st.number_input("Opposing-candle lookback", 3, 20, 8)
-            ob_max = st.number_input("Blocks kept per side", 1, 12, 6)
-            ob_atr = st.number_input("Min block size (ATR multiple)",
-                                     0.05, 2.0, 0.25, step=0.05)
-        else:
-            piv_l = st.number_input("Pivot left bars", 1, 20, 5)
-            piv_r = st.number_input("Pivot right bars", 1, 20, 3)
-            use_live = st.checkbox("Use live (unconfirmed) endpoint", True)
-            use_ema = st.checkbox("EMA confluence", True)
-            use_fvg = st.checkbox("FVG confluence", True)
-            fvg_lb = st.number_input("FVG lookback (bars)", 10, 200, 50)
+    ob_bos, ob_look, ob_max, ob_atr = 5, 8, 6, 0.25
+    liq_len, liq_tol, liq_max = 2, 0.15, 8
 
     run_scan = st.button("SCAN", type="primary", use_container_width=True)
 
