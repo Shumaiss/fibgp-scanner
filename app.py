@@ -110,8 +110,10 @@ h1,h2,h3 {{ font-family:{F_HEAD}; }}
 .panel-hd {{ font-family:{F_HEAD}; font-weight:700; letter-spacing:.18em;
   font-size:.9rem; margin-bottom:10px; }}
 
-.whale {{ display:flex; flex-wrap:wrap; align-items:center; gap:8px 28px; padding:2px 24px; }}
-.whale .art {{ flex:0 1 286px; max-width:100%; line-height:0; }}
+.whale {{ padding:0; }}
+.whale .main {{ display:flex; flex-wrap:wrap; align-items:center; gap:8px 28px; padding:6px 24px; }}
+.whale .art {{ flex:0 1 480px; max-width:100%; line-height:0; }}
+.whale .art svg {{ width:100%; height:auto; }}
 .whale .copy {{ flex:1 1 300px; display:flex; flex-direction:column; gap:8px; padding:10px 0; }}
 .whale .eyebrow {{ font-family:{F_MONO}; font-size:.68rem; letter-spacing:.3em; color:{ACC}; }}
 .whale .big {{ font-family:{F_HEAD}; font-size:1.35rem; font-weight:700; letter-spacing:.08em;
@@ -121,12 +123,14 @@ h1,h2,h3 {{ font-family:{F_HEAD}; }}
 .whale .chip {{ padding:5px 12px; border:1px solid {LINE}; font-family:{F_MONO};
   font-size:.68rem; letter-spacing:.16em; color:{TXT}; }}
 .whale .chip.on {{ border-color:{ACC}; color:{ACC}; box-shadow:0 0 10px rgba(53,224,255,.35); }}
-@keyframes wsSpin {{ to {{ transform:rotate(360deg); }} }}
-@keyframes wsRise {{ 0% {{ transform:translateY(6px); opacity:.55; }} 50% {{ opacity:1; }}
-  100% {{ transform:translateY(-8px); opacity:.55; }} }}
-.ws-spin {{ transform-origin:120px 55px; animation:wsSpin 18s linear infinite; }}
-.ws-rise {{ animation:wsRise 3.2s ease-in-out infinite alternate; }}
-@media (prefers-reduced-motion: reduce) {{ .ws-spin, .ws-rise {{ animation:none; }} }}
+.tapebox {{ overflow:hidden; border-top:1px solid {LINE}; padding:8px 0;
+  font-family:{F_MONO}; font-size:.74rem; letter-spacing:.08em; white-space:nowrap; }}
+.tape {{ display:inline-flex; animation:tapeMove var(--dur,60s) linear infinite; }}
+.tape:hover {{ animation-play-state:paused; }}
+.tape .it {{ margin-right:34px; }}
+.tape .n {{ color:{TXT}; }} .tape .p {{ color:{MUTE}; }}
+@keyframes tapeMove {{ from {{ transform:translateX(0); }} to {{ transform:translateX(-50%); }} }}
+@media (prefers-reduced-motion: reduce) {{ .tape {{ animation:none; }} }}
 
 .tablebox {{ overflow-x:auto; }}
 table.scan {{ width:100%; border-collapse:collapse; font-size:.9rem; }}
@@ -181,55 +185,83 @@ div[data-testid="stExpander"] details {{ border:1px solid {LINE}; border-radius:
 
 
 # ============================== WHALE ART ======================================
-WHALE_BODY = ("M18 66 C22 38 70 22 120 28 C155 32 180 46 198 56 L226 34 L216 59 L228 80 L198 65 "
-              "C170 82 120 93 70 90 C40 88 22 80 18 66 Z")
+FLUKE = ("M296 156 C302 132 309 112 313 98 C290 94 262 84 234 62 "
+         "C262 72 296 80 320 82 C344 80 378 72 406 62 C378 84 350 94 327 98 "
+         "C331 112 338 132 344 156 Z")
 
 
 def whale_mark() -> str:
-    """Small whale glyph for the sidebar logo."""
-    return (f"<svg width='38' height='20' viewBox='0 0 240 120' aria-hidden='true'>"
-            f"<path d='{WHALE_BODY}' fill='none' stroke='{ACC}' stroke-width='7' stroke-linejoin='round'/>"
-            f"<circle cx='50' cy='60' r='6' fill='{ACC}'/></svg>")
+    """Whale tail for the sidebar logo."""
+    return (f"<svg width='34' height='26' viewBox='226 54 188 108' aria-hidden='true'>"
+            f"<path d='{FLUKE}' fill='none' stroke='{ACC}' stroke-width='9' stroke-linejoin='round'/></svg>")
+
+
+def _fluke_art() -> str:
+    """A whale's tail breaking the surface of a price line, between zones."""
+    import numpy as _np
+    rng = _np.random.default_rng(11)
+    xs = _np.linspace(0, 640, 70)
+    ys = 150 + _np.cumsum(rng.normal(0, 2.2, 70))
+    ys = ys - ys.mean() + 150
+    ys[30:40] = _np.linspace(ys[30], 150, 10)
+    price = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+    mono = "Share Tech Mono, monospace"
+    return (
+        f"<svg viewBox='0 30 640 200' role='img' "
+        f"aria-label='A whale tail rising out of a price line, between a resistance band and a support band'>"
+        f"<rect x='0' y='162' width='640' height='16' fill='{GREEN}' opacity='0.10'/>"
+        f"<line x1='0' y1='162' x2='640' y2='162' stroke='{GREEN}' stroke-width='1' opacity='0.6'/>"
+        f"<text x='8' y='176' font-family='{mono}' font-size='11' fill='{GREEN}'>SUPPORT ZONE</text>"
+        f"<rect x='0' y='52' width='640' height='12' fill='{RED_C}' opacity='0.08'/>"
+        f"<line x1='0' y1='64' x2='640' y2='64' stroke='{RED_C}' stroke-width='1' opacity='0.5'/>"
+        f"<text x='8' y='61' font-family='{mono}' font-size='11' fill='{RED_C}'>RESISTANCE</text>"
+        f"<polyline points='{price}' fill='none' stroke='{ACC}' stroke-width='1.6' opacity='0.9'/>"
+        f"<path d='{FLUKE}' fill='{BG}' stroke='{ACC}' stroke-width='2' stroke-linejoin='round' "
+        f"style='filter:drop-shadow(0 0 8px {ACC})'/>"
+        f"<path d='M270 158 Q320 146 370 158 M250 166 Q320 152 390 166' fill='none' stroke='{ACC}' "
+        f"stroke-width='1' opacity='0.6'/>"
+        f"<g fill='{ACC}' opacity='0.7'><circle cx='284' cy='138' r='2'/><circle cx='358' cy='132' r='1.6'/>"
+        f"<circle cx='268' cy='146' r='1.4'/><circle cx='372' cy='144' r='2'/></g></svg>")
+
+
+def ticker_tape() -> str:
+    """Price and last-bar change for symbols from the last scan. Empty before a scan,
+    so the banner never shows invented numbers."""
+    scan = st.session_state.get("scan")
+    if not scan:
+        return ""
+    rows = scan[0]
+    key = (st.session_state.get("scan_market", "psx"), st.session_state.get("scan_tf", "1d"),
+           st.session_state.get("scan_start", ""))
+    rank = {"IN_SUPPORT": 0, "IN_RESISTANCE": 0, "NEAR_SUPPORT": 1, "NEAR_RESISTANCE": 1}
+    items = ""
+    for r in sorted(rows, key=lambda r: rank.get(r.status, 2))[:30]:
+        df = st.session_state.ohlc_cache.get((r.symbol, key))
+        try:
+            prev, last = float(df["Close"].iloc[-2]), float(df["Close"].iloc[-1])
+            ch = (last / prev - 1.0) * 100.0
+        except Exception:
+            continue
+        col = GREEN if ch >= 0 else RED_C
+        items += (f"<span class='it'><span class='n'>{disp_symbol(r.symbol)}</span> "
+                  f"<span class='p'>{fmt_px(last)}</span> "
+                  f"<span style='color:{col}'>{ch:+.1f}%</span></span>")
+    if not items:
+        return ""
+    dur = max(30, 3 * items.count("class='it'"))
+    return (f"<div class='tapebox'><div class='tape' style='--dur:{dur}s'>{items}{items}</div></div>")
 
 
 def whale_banner(active: str) -> str:
-    """Wireframe whale in a sonar ring, coins rising from its spout."""
-    c = ACC
-    coins = ""
-    for cx, cy, r, op in ((62, 2, 9, 1), (84, -20, 7, 0.8), (48, -30, 6, 0.6), (72, -50, 5, 0.4)):
-        coins += (f"<g opacity='{op}'><circle cx='{cx}' cy='{cy}' r='{r}' fill='{BG}' stroke='{c}' stroke-width='1.5'/>"
-                  f"<text x='{cx}' y='{cy + r * 0.42:.1f}' text-anchor='middle' font-size='{r * 1.25:.1f}' "
-                  f"font-family='Share Tech Mono, monospace' fill='{c}'>$</text></g>")
-    art = (
-        f"<svg width='286' height='170' viewBox='-90 -75 420 250' role='img' "
-        f"aria-label='Wireframe whale inside a sonar ring, with coins rising from its spout'>"
-        f"<g fill='none' stroke='{c}'>"
-        f"<circle cx='120' cy='55' r='118' stroke-width='1' opacity='0.25'/>"
-        f"<circle cx='120' cy='55' r='92' stroke-width='1' stroke-dasharray='2 7' opacity='0.5'/>"
-        f"<g class='ws-spin'>"
-        f"<circle cx='120' cy='55' r='106' stroke-width='2' stroke-dasharray='120 546' opacity='0.9'/>"
-        f"<circle cx='120' cy='55' r='106' stroke-width='2' stroke-dasharray='40 626' stroke-dashoffset='-330' opacity='0.6'/></g>"
-        f"<path d='M-20 55 H6 M234 55 H260 M120 -85 V-59 M120 169 V195' stroke-width='1.5' opacity='0.7'/></g>"
-        f"<path d='{WHALE_BODY}' fill='{c}' opacity='0.08'/>"
-        f"<path d='{WHALE_BODY}' fill='none' stroke='{c}' stroke-width='2' stroke-linejoin='round' "
-        f"style='filter:drop-shadow(0 0 6px {c})'/>"
-        f"<g fill='none' stroke='{c}' stroke-width='1' opacity='0.45'>"
-        f"<path d='M24 56 C60 40 130 40 196 58'/><path d='M22 72 C60 66 130 66 198 62'/>"
-        f"<path d='M60 30 C54 50 54 72 62 89'/><path d='M100 26 C94 48 94 74 102 92'/>"
-        f"<path d='M140 30 C136 48 136 70 142 86'/><path d='M172 42 C170 52 170 64 174 74'/></g>"
-        f"<path d='M20 72 C34 77 52 77 66 70' fill='none' stroke='{c}' stroke-width='1.5'/>"
-        f"<path d='M86 86 C94 104 110 108 120 100 C108 96 100 90 98 85' fill='{BG}' stroke='{c}' stroke-width='1.5'/>"
-        f"<circle cx='48' cy='58' r='3' fill='{c}'/>"
-        f"<path d='M62 24 V14' stroke='{c}' stroke-width='1.5' stroke-dasharray='2 3'/>"
-        f"<g class='ws-rise'>{coins}</g></svg>")
     chips = "".join(f"<span class='chip{' on' if s == active else ''}'>{s.upper()}</span>"
                     for s in ("Zones", "Order Blocks", "Liquidity"))
-    return (f"<div class='hud whale'><div class='art'>{art}</div><div class='copy'>"
-            f"<div class='eyebrow'>WHALE RADAR</div>"
+    return (f"<div class='hud whale'><div class='main'><div class='art'>{_fluke_art()}</div>"
+            f"<div class='copy'>"
+            f"<div class='eyebrow'>WHALE RADAR · KEY LEVELS</div>"
             f"<div class='big'>FOLLOW THE BIG MONEY</div>"
             f"<div class='small'>Find the price levels where large players are positioned, "
             f"across every market you trade.</div>"
-            f"<div class='chips'>{chips}</div></div></div>")
+            f"<div class='chips'>{chips}</div></div></div>{ticker_tape()}</div>")
 
 
 def strength_bars(n: int) -> str:
